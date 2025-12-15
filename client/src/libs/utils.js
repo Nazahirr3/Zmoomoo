@@ -51,8 +51,6 @@ module.exports.kFormat = function (num) {
     if (num >= 1000000) return chop(num / 1000000, 2) + 'm';
     if (num > 999) return chop(num / 1000, 2) + 'k';
     return num;
-module.exports.kFormat = function (num) {
-    return num > 999 ? (num / 1000).toFixed(1) + 'k' : num;
 };
 module.exports.capitalizeFirst = function (string) {
     return string.charAt(0).toUpperCase() + string.slice(1);

@@ -39,12 +39,13 @@ module.exports.isNumber = function (n) {
 module.exports.isString = function (s) {
     return (s && typeof s == "string");
 };
-};
 module.exports.kFormat = function (num) {
     var chop = function (val, dec) {
         var mult = Math.pow(10, dec);
         return (Math.floor(val * mult) / mult).toFixed(dec);
     };
+    if (num >= 1000000000000000000) return chop(num / 1000000000000000000, 2) + 'Q';
+    if (num >= 1000000000000000) return chop(num / 1000000000000000, 2) + 'q';
     if (num >= 1000000000000) return chop(num / 1000000000000, 2) + 't';
     if (num >= 1000000000) return chop(num / 1000000000, 2) + 'b';
     if (num >= 1000000) return chop(num / 1000000, 2) + 'm';

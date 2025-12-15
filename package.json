@@ -1,0 +1,29 @@
+{
+  "name": "moomoo-nurotech",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack MooMoo.io server and client project",
+  "license": "GNU",
+  "scripts": {
+    "build": "npm run build --workspace client",
+    "build:dev": "npm run build:dev --workspace client",
+    "start": "npm run start --workspace server",
+    "dev": "npm run dev --workspace server"
+  },
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "dependencies": {
+    "cors": "^2.8.5",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.29.1"
+  },
+  "overrides": {
+    "braces": "^3.0.3",
+    "body-parser": "2.2.1",
+    "js-yaml": "^4.1.1"
+  }
+}

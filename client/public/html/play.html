@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta property="og:image:alt" content="zmoomoo.io promotional artwork showing players defending a base">
+    <link rel="stylesheet" href="/css/hammersmith-one.css">
+    <link rel="stylesheet" href="/css/material-icons.css">
+    <link rel="stylesheet" href="/css/main.css">
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Play zmoomoo.io — Multiplayer Survival .io Game">
+    <meta name="twitter:description"
+        content="Join the ultimate survival .io experience. Build, team up, and dominate the zmoomoo.io battlefield in your browser.">
+    <meta name="twitter:image" content="https://moomoo.al007ex.com/img/promotion/banner_4.png">
+    <meta name="twitter:image:alt" content="zmoomoo.io promotional artwork of a fortified base under attack">
+
+    <!-- Structured Data: WebSite + Organization + VideoGame -->
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "WebSite",
+            "name": "zmoomoo.io",
+            "url": "https://moomoo.al007ex.com/",
+            "potentialAction": {
+            "@type": "SearchAction",
+            "target": "https://moomoo.al007ex.com/?q={search_term_string}",
+            "query-input": "required name=search_term_string"
+        }
+    }
+</script>
+    <script type="application/ld+json">
+        {
+            "@context": "https://schema.org",
+            "@type": "Organization",
+            "name": "zmoomoo.io",
+            "url": "https://moomoo.al007ex.com/",
+        "logo": {
+            "@type": "ImageObject",
+            "url": "https://moomoo.al007ex.com/img/favicon.png",
+            "width": 180,
+            "height": 180
+    }
+}
+</script>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "zmoomoo.io",
+        "url": "https://moomoo.al007ex.com/",
+        "image": "https://moomoo.al007ex.com/img/promotion/banner_4.png",
+        "description": "zmoomoo.io is a free-to-play multiplayer survival .io game where players gather resources, craft weapons, and build bases to outlast opponents.",
+        "applicationCategory": "Game",
+        "operatingSystem": "Web Browser",
+            "genre": ["Multiplayer", "Survival", "Strategy"],
+            "publisher": {
+            "publisher": {
+                "@type": "Organization",
+                "name": "zmoomoo.io"
+            },
+            "potentialAction": {
+                "@type": "PlayAction",
+                "target": {
+                    "@type": "EntryPoint",
+                    "urlTemplate": "https://moomoo.al007ex.com/"
+                }
+            }
+        }
+</script>
+
+    <!-- JS: type=module is deferred by default; also add nomodule fallback if you ship it. -->
+    <script type="module" crossorigin src="/assets/bundle.js"></script>
+</head>
+
+<body>
+
+    <script src="./libs/jquery-3.2.1.min.js"></script>
+    <script src="./libs/jquery-ui.js"></script>
+    <div id="errorNotification" class="menuCard" style="display:none">
+        <div>It looks like zmoomoo ran in to a problem. Please try <a target="_blank"
+                href="https://www.computerhope.com/issues/ch001411.htm">disabling all of your browser extensions</a> and
+            reloading the page.</div>
+        <div style="text-align:center"><a onclick="errorNotification.style.display = 'none' "
+                style="cursor:pointer">Hide</a></div>
+    </div>
+    <div id="shutdownDisplay" hidden></div>
+    <div id="mainMenu">
+        <div id="menuContainer">
+            <div id="gameName">ZMOOMOO.io</div>
+            <div id="loadingText">Loading...</div>
+            <div id="menuCardHolder" style="display:none">
+                <!-- Center Column - Tabs -->
+                <div class="menuColumn centerColumn">
+                    <div class="menuCard tabbedCard" id="guideCard">
+                        <div class="tabNavigation">
+                            <div class="tabButton active" data-tab="game">
+                                <i class="material-icons">sports_esports</i>
+                                <span>Game</span>
+                            </div>
+                            <div class="tabButton" data-tab="info">
+                                <i class="material-icons">info</i>
+                                <span>Info</span>
+                            </div>
+                            <div class="tabButton" data-tab="settings">
+                                <i class="material-icons">settings</i>
+                                <span>Settings</span>
+                            </div>
+                        </div>
+
+                        <div class="tabContentWrapper">
+                            <!-- Game Tab -->
+                            <div id="gameTab" class="tabContent active">
+                                <div class="tabInner"
+                                    style="padding: 16px; display: flex; flex-direction: column; height: 100%;">
+                                    <div class="sectionTitle" style="margin-bottom: 12px; flex-shrink: 0;">
+                                        <i class="material-icons">sports_esports</i>
+                                        <span>Enter Game</span>
+                                    </div>
+                                    <input id="nameInput" placeholder="Enter Name" maxlength="15"
+                                        style="margin-bottom: 12px; flex-shrink: 0;">
+                                    <div id="characterMainContainer"
+                                        style="position: relative; background: linear-gradient(135deg, #f8f8f8 0%, #f0f0f0 100%); border: 2px solid #e0e0e0; border-radius: 8px; min-height: 140px; padding: 12px; display: flex; flex-direction: column; gap: 12px; flex: 1;">
+                                        
+                                        <div id="skinColorPicker"
+                                            style="background: #fff; padding: 12px; border-radius: 10px; border: 2px solid #e0e0e0;">
+                                            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px;">
+                                                <i class="material-icons" style="font-size: 18px; color: #7ee559;">color_lens</i>
+                                                <span style="font-size: 14px; font-weight: 600; color: #292929;">Skin Color</span>
+                                            </div>
+                                            <div id="skinColorHolder"></div>
+                                        </div>
+
+                                        <div id="enterGame" class="menuButton primaryButton"
+                                            style="width: 100%; height: 50px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;">
+                                            <span style="font-size: 18px; font-weight: 600;">Enter game</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Info Tab -->
+                            <div id="infoTab" class="tabContent">
+                                <div class="tabInner">
+
+                                    <div class="contentSection">
+                                        <div class="sectionTitle">
+                                            <i class="material-icons">waving_hand</i>
+                                            <span>Welcome</span>
+                                        </div>
+                                        <div class="menuText" style="margin-bottom: 12px;">
+                                            Welcome to zmoomoo.io! Build your village, gather resources, and defend
+                                            against other
+                                            players.
+                                        </div>
+                                        <div class="menuText"
+                                            style="font-size: 14px; color: #888; margin-bottom: 12px;">
+                                            <strong>Objective:</strong> Collect resources, build structures, and survive
+                                            against
+                                            enemies.
+                                        </div>
+                                        <div class="infoBox" style="margin-bottom: 20px;">
+                                            <i class="material-icons">info</i>
+                                            <span>Choose your name and start playing!</span>
+                                        </div>
+                                    </div>
+
+                                    <div class="contentSection">
+                                        <div class="sectionTitle">
+                                            <i class="material-icons">keyboard</i>
+                                            <span>Keybinds</span>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                            <div class="menuText" style="font-size: 12px; color: #888;">
+                                                Click on any key to customize your controls.
+                                            </div>
+                                            <button id="resetKeybinds" style="padding: 6px 12px; background: #e74c3c; color: white; border: none; border-radius: 4px; font-size: 11px; cursor: pointer;">Reset All</button>
+                                        </div>
+                                        <div id="keybindsContainer" style="display: flex; flex-direction: column; gap: 8px;">
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Move Up (W/↑)</span>
+                                                <input type="text" class="keybindInput" data-action="moveUp" placeholder="W" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Move Left (A/←)</span>
+                                                <input type="text" class="keybindInput" data-action="moveLeft" placeholder="A" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Move Down (S/↓)</span>
+                                                <input type="text" class="keybindInput" data-action="moveDown" placeholder="S" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Move Right (D/→)</span>
+                                                <input type="text" class="keybindInput" data-action="moveRight" placeholder="D" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Lock Rotation</span>
+                                                <input type="text" class="keybindInput" data-action="lockRotation" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Quick Select Food</span>
+                                                <input type="text" class="keybindInput" data-action="quickFood" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Auto Attack</span>
+                                                <input type="text" class="keybindInput" data-action="autoAttack" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Gather/Attack</span>
+                                                <input type="text" class="keybindInput" data-action="gatherAttack" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Turret/Teleporter</span>
+                                                <input type="text" class="keybindInput" data-action="turretTeleporter" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Trap/Boostpad</span>
+                                                <input type="text" class="keybindInput" data-action="trapBoostpad" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Spike</span>
+                                                <input type="text" class="keybindInput" data-action="spike" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Woodwall</span>
+                                                <input type="text" class="keybindInput" data-action="woodwall" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Windmill</span>
+                                                <input type="text" class="keybindInput" data-action="windmill" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Open shop</span>
+                                                <input type="text" class="keybindInput" data-action="openShop" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                            <div class="keybindItem" style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #f8f8f8; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                                <span style="font-size: 13px; color: #333;">Open clan</span>
+                                                <input type="text" class="keybindInput" data-action="openClan" placeholder="—" 
+                                                    style="width: 60px; padding: 4px 8px; text-align: center; border: 2px solid #e0e0e0; border-radius: 4px; font-size: 12px; background: #fff; cursor: pointer;">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div class="contentSection">
+                                        <div class="menuText" style="text-align: center; font-size: 12px; line-height: 1.6;">
+                                            Moomoo.io was originally made by <a href="https://frvr.com" target="_blank" style="color: purple;">Yendis aka FRVR</a> all the assets and everything go to them, the project this project was made by <a href="https://github.com/al007ex/" target="_blank" style="color: purple;">al007ex</a> i just added some features so some credit goes to him aswell.
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Settings Tab -->
+                            <div id="settingsTab" class="tabContent">
+                                <div class="tabInner">
+                                    <div class="contentSection">
+                                        <div class="sectionTitle">
+                                            <i class="material-icons">tune</i>
+                                            <span>Game Settings</span>
+                                        </div>
+                                        <div class="settingsGrid">
+                                            <div class="settingItem">
+                                                <div class="settingLabel">
+                                                    <i class="material-icons">high_quality</i>
+                                                    <span>Native Resolution</span>
+                                                </div>
+                                                <input id="nativeResolution" type="checkbox" class="settingCheckbox" />
+                                            </div>
+                                            <div class="settingItem">
+                                                <div class="settingLabel">
+                                                    <i class="material-icons">wifi</i>
+                                                    <span>Show Ping</span>
+                                                </div>
+                                                <input id="showPing" type="checkbox" class="settingCheckbox" />
+                                            </div>
+                                            <div class="settingItem">
+                                                <div class="settingLabel">
+                                                    <i class="material-icons">autorenew</i>
+                                                    <span>Auto Respawn</span>
+                                                </div>
+                                                <input id="autoRespawn" type="checkbox" class="settingCheckbox" />
+                                            </div>
+                                            <div class="settingItem">
+                                                <div class="settingLabel">
+                                                    <i class="material-icons">hd</i>
+                                                    <span>High Graphics</span>
+                                                </div>
+                                                <input id="graphicsQuality" type="checkbox" class="settingCheckbox" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column - Account -->
+                <div class="menuColumn rightColumn">
+                    <div class="menuCard"
+                        style="padding: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;">
+                        <div class="accountIcon" style="margin-bottom: 6px;">
+                            <i class="material-icons" style="font-size: 95px; color: #7ee559;">account_circle</i>
+                        </div>
+                        <div class="menuHeader" style="text-align:center; margin-bottom: 6px; font-size: 22px;">Welcome
+                            to zmoomoo.io</div>
+                        <div class="menuText"
+                            style="text-align:center; margin-bottom: 14px; font-size: 17px; line-height: 1.4;">Sign in
+                            to save your
+                            progress, track statistics, and unlock exclusive features.</div>
+                        <div class="buttonGroup" style="width: 100%; gap: 8px;">
+                            <div class="menuButton primaryButton" style="padding: 10px 16px; font-size: 16px;">
+                                <span>Sign In</span>
+                            </div>
+                            <div class="menuButton secondaryButton" style="padding: 10px 16px; font-size: 16px;">
+                                <span>Create Account</span>
+                            </div>
+                        </div>
+                        <div class="infoBox" style="margin-top: 10px; padding: 10px;">
+                            <i class="material-icons" style="font-size: 16px;">info</i>
+                            <span style="font-size: 12px;">Guest mode: Play without an account</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+        <!-- Footer - positioned at the bottom of the page -->
+        <div id="menuFooter">
+            <a href="https://discord.gg/MqpUzka" target="_blank">Alex's Discord</a>
+            <span style="color: #666;">|</span>
+            <a href="https://frvr.com/legal#TermsofService" target="_blank">Terms</a>
+            <span style="color: #666;">|</span>
+            <a href="https://frvr.com/legal#PrivacyPolicy" target="_blank">Privacy</a>
+        </div>
+
+        <div id="linksContainer2" class="legacyHidden"><a href="./docs/versions.txt" target="_blank"
+                class="menuLink">v1.6.9</a>
+            | <a href="https://discord.gg/NMS3YR9Q5R" target="_blank" class="menuLink">Discord</a>
+            | <a href="https://www.youtube.com/watch?v=5DlROhT8NgU" target="_blank" class="menuLink">Terms</a>
+            | <a href="https://www.youtube.com/watch?v=5DlROhT8NgU" target="_blank" class="menuLink">Privacy</a>
+        </div>
+
+        <div id="youtuberOf" class="legacyHidden">
+            Featured Mootuber:
+            <div class="spanLink" id="featuredYoutube"><a target="_blank" class="ytLink"
+                    href="https://web.archive.org/web/20200602171143/https://www.youtube.com/channel/UCj6C_tiDeATiKd3GX127XoQ">
+                    <iclass="material-icons" style="vertical-align: top;"></i> LightThief</a></div>
+        </div>
+        <div id="youtuberPanelToggle" aria-label="Open Mootuber panel">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+                <path d="M10,16.5V7.5L16,12M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z" />
+            </svg>
+        </div>
+        <div id="youtuberExpandedPanel" class="hidden" aria-live="polite" aria-label="Featured Mootubers">
+            <div class="expandedPanelHeader">
+                <span style="color: #666;">Featured</span> <span style="color: #a56dc8;">Mootubers</span>
+            </div>
+            <div class="expandedPanelSection">
+                <div class="expandedPanelSectionTitle">CONTENT CREATORS</div>
+                <div id="youtuberLinks" role="list"></div>
+            </div>
+        </div>
+    </div>
+    <div id="pingDisplay" hidden>Not connected</div>
+    <div id="diedText">YOU DIED</div>
+    <div id="touch-controls-left"></div>
+    <div id="touch-controls-right"></div>
+    <div id="touch-controls-fullscreen"></div>
+    <div id="gameUI" style="display:none">
+        <div id="chatHolder" style="display:none"><input id="chatBox" placeholder="Enter Message" maxlength="30"></div>
+        <div id="upgradeHolder"></div>
+        <div id="upgradeCounter"></div>
+        <div id="topInfoHolder">
+            <div id="leaderboard">Leaderboard<div id="leaderboardData"></div>
+            </div>
+            <div></div>
+            <div id="killCounter" class="resourceDisplay"></div>
+        </div>
+        <div id="itemInfoHolder" class="uiElement"></div>
+        <div id="resDisplay">
+            <div id="foodDisplay" class="resourceDisplay"></div>
+            <div id="woodDisplay" class="resourceDisplay"></div>
+            <div id="stoneDisplay" class="resourceDisplay"></div>
+            <div id="scoreDisplay" class="resourceDisplay"></div>
+        </div>
+        <div id="bottomContainer">
+            <div id="ageText"></div>
+            <div id="ageBarContainer">
+                <div id="ageBar">
+                    <div id="ageBarBody"></div>
+                </div>
+            </div>
+            <div id="actionBar"></div>
+        </div>
+        <div id="notificationDisplay" style="display:none"></div>
+        <div id="allianceButton" class="uiElement gameButton"><i class="material-icons"
+                style="font-size:40px;vertical-align:middle">&#xE8D3;</i></div>
+        <div id="leaderboardButton" class="uiElement gameButton"><i class="material-icons"
+                style="font-size:40px;vertical-align:middle">leaderboard</i></div>
+        <div id="storeButton" class="uiElement gameButton"><i class="material-icons"
+                style="font-size:40px;vertical-align:middle">&#xE8D1;</i></div>
+        <div id="chatButton" class="uiElement gameButton"><i class="material-icons"
+                style="font-size:40px;vertical-align:middle">&#xE8AF;</i></div><canvas id="mapDisplay"></canvas>
+        <div id="performanceDisplay">
+            <div class="performanceItem">
+                <span class="performanceLabel">Ping:</span>
+                <span id="pingValue" class="performanceValue">0ms</span>
+            </div>
+            <div class="performanceItem">
+                <span class="performanceLabel">CPS:</span>
+                <span id="cpsValue" class="performanceValue">0</span>
+            </div>
+            <div class="performanceItem">
+                <span class="performanceLabel">FPS:</span>
+                <span id="fpsValue" class="performanceValue">60</span>
+            </div>
+            <div class="performanceItem">
+                <span class="performanceLabel">Packet:</span>
+                <span id="packetValue" class="performanceValue">0</span>
+            </div>
+        </div>
+        <div id="storeMenu">
+            <div style="padding-bottom:15px">
+                <div class="storeTab" style="margin-right:10px" onclick="changeStoreIndex(0)">Hats</div>
+                <div class="storeTab" onclick="changeStoreIndex(1)">Accessories</div>
+            </div>
+            <div id="storeHolder"></div>
+        </div>
+        <div id="allianceMenu">
+            <div id="allianceHolder"></div>
+            <div id="allianceManager"></div>
+        </div>
+    </div><canvas id="gameCanvas"></canvas>
+
+    <script>
+        document.querySelectorAll('.keybindInput').forEach(input => {
+            input.addEventListener('click', function() {
+                this.value = '';
+                this.placeholder = 'Press key...';
+                this.style.borderColor = '#7ee559';
+            });
+            
+            input.addEventListener('keydown', function(e) {
+                e.preventDefault();
+                this.value = e.key.toUpperCase();
+                this.style.borderColor = '#e0e0e0';
+                this.blur();
+                
+                const action = this.dataset.action;
+                localStorage.setItem('keybind_' + action, e.key);
+            });
+            
+            input.addEventListener('blur', function() {
+                if (!this.value) {
+                    this.placeholder = '—';
+                }
+                this.style.borderColor = '#e0e0e0';
+            });
+            
+            const savedKey = localStorage.getItem('keybind_' + input.dataset.action);
+            if (savedKey) {
+                input.value = savedKey.toUpperCase();
+            }
+        });
+    </script>
+</body>
+
+</html>

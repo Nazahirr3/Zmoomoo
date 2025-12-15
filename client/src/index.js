@@ -1712,6 +1712,33 @@ function keyDown(event) {
                     sendMapPing();
                 } else if (customAction === 'placeMarker') {
                     updateMapMarker();
+                                    } else if (customAction === 'slot1') {
+                    if (player.weapons[0] != undefined) selectToBuild(player.weapons[0], true);
+                    else if (player.items[0 - player.weapons.length] != undefined) selectToBuild(player.items[0 - player.weapons.length]);
+                } else if (customAction === 'slot2') {
+                    if (player.weapons[1] != undefined) selectToBuild(player.weapons[1], true);
+                    else if (player.items[1 - player.weapons.length] != undefined) selectToBuild(player.items[1 - player.weapons.length]);
+                } else if (customAction === 'slot3') {
+                    if (player.weapons[2] != undefined) selectToBuild(player.weapons[2], true);
+                    else if (player.items[2 - player.weapons.length] != undefined) selectToBuild(player.items[2 - player.weapons.length]);
+                } else if (customAction === 'slot4') {
+                    if (player.weapons[3] != undefined) selectToBuild(player.weapons[3], true);
+                    else if (player.items[3 - player.weapons.length] != undefined) selectToBuild(player.items[3 - player.weapons.length]);
+                } else if (customAction === 'slot5') {
+                    if (player.weapons[4] != undefined) selectToBuild(player.weapons[4], true);
+                    else if (player.items[4 - player.weapons.length] != undefined) selectToBuild(player.items[4 - player.weapons.length]);
+                } else if (customAction === 'slot6') {
+                    if (player.weapons[5] != undefined) selectToBuild(player.weapons[5], true);
+                    else if (player.items[5 - player.weapons.length] != undefined) selectToBuild(player.items[5 - player.weapons.length]);
+                } else if (customAction === 'slot7') {
+                    if (player.weapons[6] != undefined) selectToBuild(player.weapons[6], true);
+                    else if (player.items[6 - player.weapons.length] != undefined) selectToBuild(player.items[6 - player.weapons.length]);
+                } else if (customAction === 'slot8') {
+                    if (player.weapons[7] != undefined) selectToBuild(player.weapons[7], true);
+                    else if (player.items[7 - player.weapons.length] != undefined) selectToBuild(player.items[7 - player.weapons.length]);
+                } else if (customAction === 'slot9') {
+                    if (player.weapons[8] != undefined) selectToBuild(player.weapons[8], true);
+                    else if (player.items[8 - player.weapons.length] != undefined) selectToBuild(player.items[8 - player.weapons.length]);
                 }
             } else if (keyNum == 69) {
                 sendAutoGather();

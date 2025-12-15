@@ -1708,6 +1708,10 @@ function keyDown(event) {
                     toggleStoreMenu();
                 } else if (customAction === 'openClan') {
                     toggleAllianceMenu();
+                                    } else if (customAction === 'pulseLocation') {
+                    sendMapPing();
+                } else if (customAction === 'placeMarker') {
+                    updateMapMarker();
                 }
             } else if (keyNum == 69) {
                 sendAutoGather();

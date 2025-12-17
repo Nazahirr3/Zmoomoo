@@ -210,6 +210,7 @@ function follmoo() {
 
 var useNativeResolution;
 var showPing;
+var showCps;
 var pixelDensity = 1;
 var delta, now, lastSent;
 var lastUpdate = Date.now();
@@ -277,6 +278,7 @@ var gameCanvas = document.getElementById("gameCanvas");
 var mainContext = gameCanvas.getContext("2d");
 var nativeResolutionCheckbox = document.getElementById("nativeResolution");
 var showPingCheckbox = document.getElementById("showPing");
+var showCpsCheckbox = document.getElementById("showCps");
 var shutdownDisplay = document.getElementById("shutdownDisplay");
 var menuCardHolder = document.getElementById("menuCardHolder");
 var guideCard = document.getElementById("guideCard");
@@ -1255,7 +1257,8 @@ function prepareUI() {
     }
 
     showPing = getSavedVal("show_ping") == "true";
-    updatePerformancePanelVisibility();
+    showCps = getSavedVal("show_cps") == "true";
+    updatePingDisplayVisibility();
 
     setInterval(function () {
         if (window.cordova) {
@@ -1347,7 +1350,12 @@ function prepareUI() {
     showPingCheckbox.onchange = UTILS.checkTrusted(function (e) {
         showPing = showPingCheckbox.checked;
         saveVal("show_ping", showPing ? "true" : "false");
-        updatePerformancePanelVisibility();
+       updatePingDisplayVisibility();
+    });
+    showCpsCheckbox.checked = showCps;
+    showCpsCheckbox.onchange = UTILS.checkTrusted(function (e) {
+        showCps = showCpsCheckbox.checked;
+        saveVal("show_cps", showCps ? "true" : "false");
     });
 }
 
@@ -2273,15 +2281,8 @@ function updateGame() {
                             mainContext.drawImage(iconSprites["skull"], tmpX, (tmpObj.y - yOffset - tmpObj.scale) - config.nameY - (tmpS / 2) - 5, tmpS, tmpS);
                         }
                     }
-                    var statsParts = [];
-                    if (typeof tmpObj.cps === "number" && tmpObj.cps >= 0) {
-                        statsParts.push(Math.max(0, Math.round(tmpObj.cps)) + " CPS");
-                    }
-                    if (typeof tmpObj.ping === "number" && tmpObj.ping >= 0) {
-                        statsParts.push(tmpObj.ping + "ms");
-                    }
-                    if (statsParts.length > 0) {
-                        var statsText = statsParts.join(" | ");
+                   if (showCps && typeof tmpObj.cps === "number" && tmpObj.cps >= 0) {
+                        var statsText = Math.max(0, Math.round(tmpObj.cps)) + " CPS";
                         var statsY = (tmpObj.y - yOffset - tmpObj.scale) - config.nameY + 22;
                         mainContext.font = "20px Hammersmith One";
                         mainContext.lineWidth = 6;
@@ -3197,11 +3198,8 @@ var lastFpsTime = Date.now();
 var packetCounter = 0;
 var packetCounterDisplay = 0;
 var lastPacketTime = Date.now();
-var performanceDisplay = null;
+var pingDisplay = null;
 var pingValueElement = null;
-var cpsValueElement = null;
-var fpsValueElement = null;
-var packetValueElement = null;
 var clickTimestamps = [];
 var clientCps = 0;
 var statsDirty = true;
@@ -3209,17 +3207,13 @@ var lastStatsSent = 0;
 var statsSendInterval = 200;
 
 function initPerformanceDisplay() {
-    performanceDisplay = document.getElementById("performanceDisplay");
+    pingDisplay = document.getElementById("pingDisplay");
     pingValueElement = document.getElementById("pingValue");
-    cpsValueElement = document.getElementById("cpsValue");
-    fpsValueElement = document.getElementById("fpsValue");
-    packetValueElement = document.getElementById("packetValue");
-    updatePerformancePanelVisibility();
+    updatePingDisplayVisibility();
 }
-
-function updatePerformancePanelVisibility() {
-    if (performanceDisplay) {
-        performanceDisplay.style.display = showPing ? "flex" : "none";
+function updatePingDisplayVisibility() {
+    if (pingDisplay) {
+        pingDisplay.style.display = showPing ? "block" : "none";
     }
 }
 
@@ -3240,9 +3234,7 @@ function updateClientCps(now) {
     }
     pruneClickTimestamps(now);
     clientCps = clickTimestamps.length;
-    if (cpsValueElement) {
-        cpsValueElement.textContent = Math.max(0, Math.round(clientCps)).toString();
-    }
+    
 }
 
 function recordClickEvent() {
@@ -3272,16 +3264,9 @@ function trySendPlayerStats() {
 }
 
 function updatePerformanceDisplay() {
-    if (!performanceDisplay) {
-        return;
-    }
-    // Update fps
+   var currentTime = Date.now();
     fpsCounter++;
-    var currentTime = Date.now();
     if (currentTime - lastFpsTime >= 1000) {
-        if (fpsValueElement) {
-            fpsValueElement.textContent = fpsCounter;
-        }
         fpsCounter = 0;
         lastFpsTime = currentTime;
     }
@@ -3289,9 +3274,6 @@ function updatePerformanceDisplay() {
         packetCounterDisplay = packetCounter;
         packetCounter = 0;
         lastPacketTime = currentTime;
-        if (packetValueElement) {
-            packetValueElement.textContent = packetCounterDisplay + "/s";
-        }
     }
     updateClientCps(currentTime);
     trySendPlayerStats();
@@ -3301,7 +3283,7 @@ function pingSocketResponse() {
     var pingTime = Date.now() - lastPing;
     window.pingTime = pingTime;
     if (pingValueElement) {
-        pingValueElement.textContent = pingTime + "ms";
+        pingValueElement.textContent = pingTime;
     }
     statsDirty = true;
 }

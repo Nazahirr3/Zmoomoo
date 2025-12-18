@@ -199,22 +199,27 @@ export class Player {
 
                 // VALIDATE NAME:
                 var name = data.name + "";
-                name = name.slice(0, config.maxNameLength);
-                name = name.replace(/[^\w:\(\)\/? -]+/gmi, " "); // USE SPACE SO WE CAN CHECK PROFANITY
-                name = name.replace(/[^\x00-\x7F]/g, " ");
-                name = name.trim();
-
-                // CHECK IF IS PROFANE:
-                var isProfane = false;
-                var convertedName = name.toLowerCase().replace(/\s/g, "").replace(/1/g, "i").replace(/0/g, "o").replace(/5/g, "s");
-                for (var word of langFilter.list) {
-                    if (convertedName.indexOf(word) != -1) {
-                        isProfane = true;
-                        break;
+                                
+                // allow guest as special case
+                if (name === "Guest") {
+                    this.name = "Guest";
+                } else {
+                    name = name.slice(0, config.maxNameLength);
+                    name = name.replace(/[^\w:\(\)\/? -]+/gmi, " "); // USE SPACE SO WE CAN CHECK PROFANITY
+                    name = name.replace(/[^\x00-\x7F]/g, " ");
+                    name = name.trim();
+                    // CHECK IF IS PROFANE:
+                    var isProfane = false;
+                    var convertedName = name.toLowerCase().replace(/\s/g, "").replace(/1/g, "i").replace(/0/g, "o").replace(/5/g, "s");
+                    for (var word of langFilter.list) {
+                        if (convertedName.indexOf(word) != -1) {
+                            isProfane = true;
+                            break;
+                        }
                     }
-                }
-                if (name.length > 0 && !isProfane) {
-                    this.name = name;
+                    if (name.length > 0 && !isProfane) {
+                        this.name = name;
+                    }
                 }
 
                 // SKIN:

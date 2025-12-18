@@ -1885,6 +1885,7 @@ var deathTextScale = 99999;
 
 function killPlayer() {
     inGame = false;
+    updatePingDisplayVisibility();
     try {
         factorem.refreshAds([2], true);
     } catch (e) { };

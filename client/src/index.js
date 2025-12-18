@@ -3213,7 +3213,7 @@ function initPerformanceDisplay() {
 }
 function updatePingDisplayVisibility() {
     if (pingDisplay) {
-        pingDisplay.style.display = showPing ? "block" : "none";
+     pingDisplay.style.display = (showPing && inGame) ? "block" : "none";
     }
 }
 

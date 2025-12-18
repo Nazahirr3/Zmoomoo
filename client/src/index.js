@@ -3326,9 +3326,10 @@ function startGame() {
     loadIcons();
     loadingText.style.display = "none";
     menuCardHolder.style.display = "flex";
-    nameInput.value = getSavedVal("moo_name") || "";
-    if (!tmpHasAuth) {
-        nameInput.disabled = true;
+   if (tmpHasAuth) {
+        nameInput.value = getSavedVal("moo_name") || "";
+    } else {
+        nameInput.value = "Guest";
     }
     prepareUI();
     initPerformanceDisplay();

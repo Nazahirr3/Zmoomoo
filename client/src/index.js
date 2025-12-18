@@ -1854,6 +1854,7 @@ function enterGame() {
     saveVal("moo_name", nameInput.value);
     if (!inGame && socketReady()) {
         inGame = true;
+        updatePingDisplayVisibility();
         showLoadingText("Loading...");
         var tmpName = tmpHasAuth ? nameInput.value : "Guest";
         io.send("M", {
@@ -1874,6 +1875,7 @@ function setupGame(yourSID) {
     playerSID = yourSID;
     attackState = 0;
     inGame = true;
+    updatePingDisplayVisibility();
     if (firstSetup) {
         firstSetup = false;
         gameObjects.length = 0;

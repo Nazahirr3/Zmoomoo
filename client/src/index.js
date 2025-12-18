@@ -70,6 +70,8 @@ if (typeof window !== "undefined" && typeof fetch === "function") {
     }, 50000);
 }
 
+var tmpHasAuth = localStorage.getItem("auth_token");
+
 
 window.onload = function () {
     showLoadingText("Connecting...");
@@ -1853,8 +1855,9 @@ function enterGame() {
     if (!inGame && socketReady()) {
         inGame = true;
         showLoadingText("Loading...");
+        var tmpName = tmpHasAuth ? nameInput.value : "Guest";
         io.send("M", {
-            name: nameInput.value,
+            name: TmpName,
             moofoll: moofoll,
             skin: skinColor
         });
@@ -3324,6 +3327,9 @@ function startGame() {
     loadingText.style.display = "none";
     menuCardHolder.style.display = "flex";
     nameInput.value = getSavedVal("moo_name") || "";
+    if (!tmpHasAuth) {
+        nameInput.disabled = true;
+    }
     prepareUI();
     initPerformanceDisplay();
 }

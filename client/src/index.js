@@ -1857,7 +1857,7 @@ function enterGame() {
         showLoadingText("Loading...");
         var tmpName = tmpHasAuth ? nameInput.value : "Guest";
         io.send("M", {
-            name: TmpName,
+            name: tmpName,
             moofoll: moofoll,
             skin: skinColor
         });

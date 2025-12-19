@@ -1875,7 +1875,6 @@ function setupGame(yourSID) {
     playerSID = yourSID;
     attackState = 0;
     inGame = true;
-    updatePingDisplayVisibility();
     if (firstSetup) {
         firstSetup = false;
         gameObjects.length = 0;

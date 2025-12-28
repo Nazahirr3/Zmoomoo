@@ -1280,6 +1280,73 @@ span {
         border: 1px solid #e0e0e0;
 }
 
+/* Settings description*/
+.settingHelp:hover {
+    background: #7ee559 !important;
+    color: white !important;
+}
+
+#settingsHelpMenu {
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    width: 600px !important;
+    max-width: 90vw !important;
+    background: white !important;
+    border-radius: 12px !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3) !important;
+    z-index: 20000 !important;
+    padding: 30px !important;
+    display: none;
+    flex-direction: column !important;
+    align-items: center !important;
+    border: 2px solid #e0e0e0 !important;
+}
+
+.helpDescription {
+    color: black !important;
+    font-size: 18px !important;
+    text-align: center !important;
+    margin-bottom: 20px !important;
+    line-height: 1.4 !important;
+    font-weight: bold !important;
+}
+
+.helpImage {
+    width: 100% !important;
+    height: auto !important;
+    border-radius: 8px !important;
+    border: 2px solid #ddd !important;
+}
+
+#helpMenuOverlay {
+    position: fixed;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    background: rgba(0,0,0,0.7) !important;
+    z-index: 19999 !important;
+}
+
+.helpCloseBtn {
+    margin-top: 15px;
+    padding: 8px 20px;
+    background: #7ee559;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.helpCloseBtn:hover {
+    background: #6fc94e;
+}
+
+
 .settingItem:hover {
         background: #e8f5e0;
         border-color: rgba(126, 229, 89, 0.4);

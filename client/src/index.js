@@ -279,8 +279,56 @@ var chatButton = document.getElementById("chatButton");
 var gameCanvas = document.getElementById("gameCanvas");
 var mainContext = gameCanvas.getContext("2d");
 var nativeResolutionCheckbox = document.getElementById("nativeResolution");
-var showPingCheckbox = document.getElementById("showPing");
-var showCpsCheckbox = document.getElementById("showCps");
+    var showPingCheckbox = document.getElementById("showPing");
+    var showCpsCheckbox = document.getElementById("showCps");
+
+    window.closeHelpMenu = function() {
+        document.getElementById("settingsHelpMenu").style.display = "none";
+        document.getElementById("helpMenuOverlay").style.display = "none";
+    };
+
+    function openHelpMenu(setting) {
+        var content = document.getElementById("helpMenuContent");
+        var img = document.getElementById("helpMenuImage");
+        var menu = document.getElementById("settingsHelpMenu");
+        var overlay = document.getElementById("helpMenuOverlay");
+        
+        var data = {
+            nativeResolution: {
+                text: "Native Resolution: This setting allows the game to run at your screen's actual resolution. If disabled, the game might look blurry but run faster. If enabled, it looks much sharper.",
+                img: "img/settings/native_resolution.png"
+            },
+            showPing: {
+                text: "Show Ping: Displays your connection latency to the server in milliseconds at the top of the screen. Lower is better!",
+                img: "img/settings/show_ping.png"
+            },
+            showCps: {
+                text: "Show CPS: Displays your Clicks Per Second. This shows how fast you are clicking your mouse or pressing keys.",
+                img: "img/settings/show_cps.png"
+            },
+            highGraphics: {
+                text: "High Graphics: Enables advanced visual effects like better shadows, smoother animations, and detailed textures. Disable this if you experience lag.",
+                img: "img/settings/high_graphics.png"
+            }
+        };
+        
+        if (data[setting]) {
+            content.textContent = data[setting].text;
+            img.src = data[setting].img;
+            img.style.display = "block";
+            menu.style.display = "flex";
+            overlay.style.display = "block";
+        }
+    }
+
+    document.querySelectorAll(".settingHelp").forEach(function(el) {
+        el.onclick = function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openHelpMenu(this.getAttribute("data-setting"));
+        };
+    });
+
 var shutdownDisplay = document.getElementById("shutdownDisplay");
 var menuCardHolder = document.getElementById("menuCardHolder");
 var guideCard = document.getElementById("guideCard");

@@ -278,13 +278,15 @@ var storeButton = document.getElementById("storeButton");
 var chatButton = document.getElementById("chatButton");
 var gameCanvas = document.getElementById("gameCanvas");
 var mainContext = gameCanvas.getContext("2d");
-var nativeResolutionCheckbox = document.getElementById("nativeResolution");
+    var nativeResolutionCheckbox = document.getElementById("nativeResolution");
     var showPingCheckbox = document.getElementById("showPing");
     var showCpsCheckbox = document.getElementById("showCps");
 
     window.closeHelpMenu = function() {
-        document.getElementById("settingsHelpMenu").style.display = "none";
-        document.getElementById("helpMenuOverlay").style.display = "none";
+        var menu = document.getElementById("settingsHelpMenu");
+        var overlay = document.getElementById("helpMenuOverlay");
+        if (menu) menu.style.display = "none";
+        if (overlay) overlay.style.display = "none";
     };
 
     function openHelpMenu(setting) {
@@ -313,11 +315,13 @@ var nativeResolutionCheckbox = document.getElementById("nativeResolution");
         };
         
         if (data[setting]) {
-            content.textContent = data[setting].text;
-            img.src = data[setting].img;
-            img.style.display = "block";
-            menu.style.display = "flex";
-            overlay.style.display = "block";
+            if (content) content.textContent = data[setting].text;
+            if (img) {
+                img.src = data[setting].img;
+                img.style.display = "block";
+            }
+            if (menu) menu.style.display = "flex";
+            if (overlay) overlay.style.display = "block";
         }
     }
 
@@ -1392,21 +1396,27 @@ function prepareUI() {
         e.currentTarget.value = newValue.slice(0, 15);
     });
 
-    nativeResolutionCheckbox.checked = useNativeResolution;
-    nativeResolutionCheckbox.onchange = UTILS.checkTrusted(function (e) {
-        setUseNativeResolution(e.target.checked);
-    });
-    showPingCheckbox.checked = showPing;
-    showPingCheckbox.onchange = UTILS.checkTrusted(function (e) {
-        showPing = showPingCheckbox.checked;
-        saveVal("show_ping", showPing ? "true" : "false");
-       updatePingDisplayVisibility();
-    });
-    showCpsCheckbox.checked = showCps;
-    showCpsCheckbox.onchange = UTILS.checkTrusted(function (e) {
-        showCps = showCpsCheckbox.checked;
-        saveVal("show_cps", showCps ? "true" : "false");
-    });
+    if (nativeResolutionCheckbox) {
+        nativeResolutionCheckbox.checked = useNativeResolution;
+        nativeResolutionCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            setUseNativeResolution(e.target.checked);
+        });
+    }
+    if (showPingCheckbox) {
+        showPingCheckbox.checked = showPing;
+        showPingCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            showPing = showPingCheckbox.checked;
+            saveVal("show_ping", showPing ? "true" : "false");
+            if (typeof updatePingDisplayVisibility === "function") updatePingDisplayVisibility();
+        });
+    }
+    if (showCpsCheckbox) {
+        showCpsCheckbox.checked = showCps;
+        showCpsCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            showCps = showCpsCheckbox.checked;
+            saveVal("show_cps", showCps ? "true" : "false");
+        });
+    }
 }
 
 function updateItems(data, wpn) {
@@ -1427,7 +1437,7 @@ function updateItems(data, wpn) {
 function setUseNativeResolution(useNative) {
     useNativeResolution = useNative;
     pixelDensity = useNative ? (window.devicePixelRatio || 1) : 1;
-    nativeResolutionCheckbox.checked = useNative;
+    if (nativeResolutionCheckbox) nativeResolutionCheckbox.checked = useNative;
     saveVal("native_resolution", useNative.toString());
     resize();
 }

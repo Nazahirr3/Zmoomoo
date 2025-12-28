@@ -55,8 +55,7 @@
         "applicationCategory": "Game",
         "operatingSystem": "Web Browser",
             "genre": ["Multiplayer", "Survival", "Strategy"],
-            "publisher": {
-            "publisher": {
+                       "publisher": {
                 "@type": "Organization",
                 "name": "zmoomoo.io"
             },
@@ -330,6 +329,7 @@
                                         <div class="settingsGrid">
                                             <div class="settingItem">
                                                 <div class="settingLabel">
+                                                    <div class="settingHelp" data-setting="nativeResolution" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
                                                     <i class="material-icons">high_quality</i>
                                                     <span>Native Resolution</span>
                                                 </div>
@@ -337,6 +337,7 @@
                                             </div>
                                             <div class="settingItem">
                                                 <div class="settingLabel">
+                                                    <div class="settingHelp" data-setting="showPing" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
                                                     <i class="material-icons">wifi</i>
                                                     <span>Show Ping</span>
                                                 </div>
@@ -344,20 +345,15 @@
                                             </div>
                                             <div class="settingItem">
                                                 <div class="settingLabel">
-                                                                                                       <i class="material-icons">mouse</i>
+                                                    <div class="settingHelp" data-setting="showCps" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
+                                                    <i class="material-icons">mouse</i>
                                                     <span>Show CPS</span>
-                                                </div>
-                                                <input id="showCps" type="checkbox" class="settingCheckbox" />
-                                            </div>
-                                            <div class="settingItem">
-                                                <div class="settingLabel"> 
-                                                    <i class="material-icons">autorenew</i>
-                                                    <span>Auto Respawn</span>
                                                 </div>
                                                 <input id="autoRespawn" type="checkbox" class="settingCheckbox" />
                                             </div>
                                             <div class="settingItem">
                                                 <div class="settingLabel">
+                                                    <div class="settingHelp" data-setting="highGraphics" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
                                                     <i class="material-icons">hd</i>
                                                     <span>High Graphics</span>
                                                 </div>
@@ -371,6 +367,13 @@
                     </div>
                 </div>
 
+                <div id="helpMenuOverlay"></div>
+    <div id="settingsHelpMenu">
+        <div id="helpMenuContent" class="helpDescription"></div>
+        <img id="helpMenuImage" class="helpImage" src="" alt="Setting Example">
+        <button class="helpCloseBtn" onclick="closeHelpMenu()">Close</button>
+    </div>
+                
                 <!-- Right Column - Account -->
                 <div class="menuColumn rightColumn">
                     <div class="menuCard"
@@ -421,7 +424,7 @@
             Featured Mootuber:
             <div class="spanLink" id="featuredYoutube"><a target="_blank" class="ytLink"
                     href="https://web.archive.org/web/20200602171143/https://www.youtube.com/channel/UCj6C_tiDeATiKd3GX127XoQ">
-                    <iclass="material-icons" style="vertical-align: top;"></i> LightThief</a></div>
+                    <i class="material-icons" style="vertical-align: top;"></i> LightThief</a></div>
         </div>
         <div id="youtuberPanelToggle" aria-label="Open Mootuber panel">
             <svg viewBox="0 0 24 24" fill="currentColor">

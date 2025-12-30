@@ -48,6 +48,8 @@ var ProjectileManager = require("./data/projectileManager.js");
 
 var Filter = require("bad-words");
 
+var texturePacks = require("./texturePacks.js");
+
 var textManager = new animText.TextManager();
 var LOG_PREFIX = "[client]";
 
@@ -311,6 +313,26 @@ var mainContext = gameCanvas.getContext("2d");
             highGraphics: {
                 text: "High Graphics: Enables advanced visual effects like better shadows, smoother animations, and detailed textures. Disable this if you experience lag.",
                 img: "img/settings/high_graphics.png"
+            },
+            oldTexture: {
+                text: "Old Texture by Murka: A texture pack that brings back the classic MooMoo.io look with nostalgic visuals and original game aesthetics.",
+                img: "https://i.imgur.com/29vGQfg.png"
+            },
+            warriorChronicles: {
+                text: "The Warrior Chronicles by eXistenZ: An epic texture pack featuring warrior-themed designs with medieval weapons and armor aesthetics.",
+                img: "https://i.imgur.com/MJWtX3o.png"
+            },
+            redDragon: {
+                text: "Red Dragon by eXistenZ: A fierce texture pack with dragon-inspired designs featuring red and fiery visual elements.",
+                img: "https://i.imgur.com/tMGhbhN.png"
+            },
+            blackSwordsman: {
+                text: "The Black Swordsman by eXistenZ: A dark and mysterious texture pack with black-themed weapons and equipment inspired by legendary swordsmen.",
+                img: "https://i.imgur.com/7vXJpkE.png"
+            },
+            rsdPack: {
+                text: "RSD Pack by ROYqL & RoTama's: A collaborative texture pack featuring unique designs and custom visual elements created by the RSD team.",
+                img: "https://i.imgur.com/xkD5fsY.png"
             }
         };
         
@@ -1415,6 +1437,97 @@ function prepareUI() {
         showCpsCheckbox.onchange = UTILS.checkTrusted(function (e) {
             showCps = showCpsCheckbox.checked;
             saveVal("show_cps", showCps ? "true" : "false");
+        });
+    }
+    
+    // Texture Pack checkboxes
+    var oldTextureCheckbox = document.getElementById("oldTexture");
+    var warriorChronCheckbox = document.getElementById("warriorChronicles");
+    var redDragonCheckbox = document.getElementById("redDragon");
+    var blackSwordCheckbox = document.getElementById("blackSwordsman");
+    var rsdPackCheckbox = document.getElementById("rsdPack");
+    
+    // Load saved texture pack
+    // Initialize texture pack system
+    texturePacks.init();
+    texturePacks.loadSavedPack();
+    
+    // Set initial checkbox states
+    if (oldTextureCheckbox) oldTextureCheckbox.checked = (texturePacks.currentPack === "Old Textures");
+    if (warriorChronCheckbox) warriorChronCheckbox.checked = (texturePacks.currentPack === "The Warrior Chronicles");
+    if (redDragonCheckbox) redDragonCheckbox.checked = (texturePacks.currentPack === "Red Dragon");
+    if (blackSwordCheckbox) blackSwordCheckbox.checked = (texturePacks.currentPack === "The Black Swordsman");
+    if (rsdPackCheckbox) rsdPackCheckbox.checked = (texturePacks.currentPack === "RSD Pack");
+    
+    // Add event listeners for texture pack toggles
+    if (oldTextureCheckbox) {
+        oldTextureCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            if (e.target.checked) {
+                texturePacks.setPack("Old Textures");
+                // Uncheck other packs
+                if (warriorChronCheckbox) warriorChronCheckbox.checked = false;
+                if (redDragonCheckbox) redDragonCheckbox.checked = false;
+                if (blackSwordCheckbox) blackSwordCheckbox.checked = false;
+                if (rsdPackCheckbox) rsdPackCheckbox.checked = false;
+            } else {
+                texturePacks.setPack("Default");
+            }
+        });
+    }
+    
+    if (warriorChronCheckbox) {
+        warriorChronCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            if (e.target.checked) {
+                texturePacks.setPack("The Warrior Chronicles");
+                if (oldTextureCheckbox) oldTextureCheckbox.checked = false;
+                if (redDragonCheckbox) redDragonCheckbox.checked = false;
+                if (blackSwordCheckbox) blackSwordCheckbox.checked = false;
+                if (rsdPackCheckbox) rsdPackCheckbox.checked = false;
+            } else {
+                texturePacks.setPack("Default");
+            }
+        });
+    }
+    
+    if (redDragonCheckbox) {
+        redDragonCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            if (e.target.checked) {
+                texturePacks.setPack("Red Dragon");
+                if (oldTextureCheckbox) oldTextureCheckbox.checked = false;
+                if (warriorChronCheckbox) warriorChronCheckbox.checked = false;
+                if (blackSwordCheckbox) blackSwordCheckbox.checked = false;
+                if (rsdPackCheckbox) rsdPackCheckbox.checked = false;
+            } else {
+                texturePacks.setPack("Default");
+            }
+        });
+    }
+    
+    if (blackSwordCheckbox) {
+        blackSwordCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            if (e.target.checked) {
+                texturePacks.setPack("The Black Swordsman");
+                if (oldTextureCheckbox) oldTextureCheckbox.checked = false;
+                if (warriorChronCheckbox) warriorChronCheckbox.checked = false;
+                if (redDragonCheckbox) redDragonCheckbox.checked = false;
+                if (rsdPackCheckbox) rsdPackCheckbox.checked = false;
+            } else {
+                texturePacks.setPack("Default");
+            }
+        });
+    }
+    
+    if (rsdPackCheckbox) {
+        rsdPackCheckbox.onchange = UTILS.checkTrusted(function (e) {
+            if (e.target.checked) {
+                texturePacks.setPack("RSD Pack");
+                if (oldTextureCheckbox) oldTextureCheckbox.checked = false;
+                if (warriorChronCheckbox) warriorChronCheckbox.checked = false;
+                if (redDragonCheckbox) redDragonCheckbox.checked = false;
+                if (blackSwordCheckbox) blackSwordCheckbox.checked = false;
+            } else {
+                texturePacks.setPack("Default");
+            }
         });
     }
 }

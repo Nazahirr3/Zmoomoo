@@ -32,7 +32,7 @@ const __dirname = path.dirname(__filename);
 
 const CLIENT_DIST_DIR = path.resolve(__dirname, "../../dist/client");
 const INDEX = path.join(CLIENT_DIST_DIR, "html/play.html");
-const PORT = Number(process.env.PORT ?? 8080);
+const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const SERVER_START_TIME = Date.now();
 const SERVER_METADATA = {

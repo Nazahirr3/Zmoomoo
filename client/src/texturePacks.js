@@ -65,7 +65,9 @@ texturePacks.init = function() {
     });
 };
 
-texturePacks.getTexturePackImg = function(id, type) {
+    const pixel_img = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
+    texturePacks.getTexturePackImg = function(id, type) {
     if (this.currentPack === "Default") {
         return null; // Use default textures
     }
@@ -82,7 +84,7 @@ texturePacks.getTexturePackImg = function(id, type) {
                 13: "https://i.postimg.cc/BvqyGjNm/Medic-Gear-V2.png",
                 11: "https://i.postimg.cc/7PFqrNzX/Spike-V2.png",
                 "11_p": "https://i.postimg.cc/7PFqrNzX/Spike-V2.png",
-                "11_top": "",
+                "11_top": "none",
                 9: "https://i.postimg.cc/g0N7cGTm/Miner.png",
                 4: "https://i.postimg.cc/Tw14pBzm/Ranger-Hat.png",
                 18: "https://i.postimg.cc/RhjyrGbt/Explorer-Hat-V2.png",
@@ -222,7 +224,7 @@ texturePacks.getTexturePackImg = function(id, type) {
                 13: "https://i.imgur.com/EwkbsHN.png",
                 11: "https://i.imgur.com/Gu3ZJlY.png",
                 "11_p": "https://i.imgur.com/NCkyBlK.png",
-                "11_top": "https://i.imgur.com/zWJTlbI.png",
+                "11_top": "none",
                 9: "https://i.imgur.com/1nY34aL.png",
                 18: "https://i.imgur.com/in5H6vw.png",
                 40: "https://i.imgur.com/lKGtlDF.png",
@@ -272,11 +274,13 @@ texturePacks.getTexturePackImg = function(id, type) {
                 50: "http://i.imgur.com/q9JlWrd.png",
                 11: "http://i.imgur.com/EbrAqWU.png",
                 "11_p": "http://i.imgur.com/EbrAqWU.png",
+                "11_top": "none",
                 15: "http://i.imgur.com/4Ti0G4R.png",
                 20: "http://i.imgur.com/BdPQwfF.png",
                 22: "http://i.imgur.com/CoeJltc.png",
-                53: "http://i.imgur.com/uQvWtke.png",
-                "53_p": "http://i.imgur.com/uQvWtke.png"
+                53: "none",
+                "53_p": "http://i.imgur.com/uQvWtke.png",
+                "53_top": "http://i.imgur.com/uQvWtke.png"
             },
             accessories: {
                 19: "http://i.imgur.com/SWdR4eY.png",
@@ -319,6 +323,9 @@ texturePacks.getTexturePackImg = function(id, type) {
     else return null;
     
     const textureUrl = pack[category]?.[id];
+    
+    // Return pixel if texture is "none"
+    if (textureUrl === "none") return pixel_img;
     
     // Return null if texture is empty string or undefined (use default)
     if (!textureUrl || textureUrl === "") return null;

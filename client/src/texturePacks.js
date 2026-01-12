@@ -88,7 +88,7 @@ texturePacks.init = function() {
                 9: "https://i.postimg.cc/g0N7cGTm/Miner.png",
                 4: "https://i.postimg.cc/Tw14pBzm/Ranger-Hat.png",
                 18: "https://i.postimg.cc/RhjyrGbt/Explorer-Hat-V2.png",
-                40: "https://i.imgur.com/foDF6AI.png",
+                40: "none",
                 6: "https://i.postimg.cc/662BPP8y/Soldier-Helmet.png",
                 20: "https://i.postimg.cc/Dmkjp08d/Samurai-Hat.png",
                 23: "https://i.postimg.cc/WpHP6wST/Anti-Venom-Gear.png",

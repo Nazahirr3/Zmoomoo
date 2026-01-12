@@ -1841,6 +1841,9 @@ function keysActive() {
 
 function keyDown(event) {
     var keyNum = event.which || event.keyCode || 0;
+    if (keyNum == 32 && (storeMenu.style.display == "block" || allianceMenu.style.display == "block")) {
+        event.preventDefault();
+    }
     if (keyNum == 27) {
         hideAllWindows();
     } else if (player && player.alive && keysActive()) {

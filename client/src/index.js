@@ -3629,6 +3629,19 @@ function initKeybindInputs() {
             if (activeKeybindInput === input) {
                 e.preventDefault();
                 var keyCode = e.which || e.keyCode || 0;
+                
+                // Unbind other actions using the same keyCode
+                for (var otherAction in customKeybinds) {
+                    if (otherAction !== action && customKeybinds[otherAction] === keyCode) {
+                        delete customKeybinds[otherAction];
+                        // Update UI for the unbound input
+                        var otherInput = document.querySelector('.keybindInput[data-action="' + otherAction + '"]');
+                        if (otherInput) {
+                            otherInput.value = '';
+                        }
+                    }
+                }
+
                 customKeybinds[action] = keyCode;
                 input.value = getKeyName(keyCode);
                 input.style.borderColor = '#e0e0e0';

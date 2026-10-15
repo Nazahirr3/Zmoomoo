@@ -147,11 +147,17 @@ export class Game {
                 this.server.broadcast("G", payload);
             }
 
-            const activeAis = this.ais.filter(ai => ai.active);
+            // build activeAis once
+            const activeAis = [];
+            for (let aiI = 0; aiI < this.ais.length; aiI++) {
+                const a = this.ais[aiI];
+                if (a.active) activeAis.push(a);
+            }
 
+            // reuse flat arrays to avoid allocations
             for (const player of this.players) {
 
-                _sent_players.length = 0;
+                _sent_players.length = 0; // now used as flat list of values
                 _sent_objects.length = 0;
 
                 for (let i2 = 0; i2 < this.players.length; i2++) {
@@ -169,37 +175,36 @@ export class Game {
                         player2.needsResourceSync = false;
                         player2.syncResources();
                     }
-                    _sent_players.push(player2.getInfo());
+
+                    const info = player2.getInfo();
+                    for (let j = 0; j < info.length; j++) _sent_players.push(info[j]);
                 }
 
                 for (let oi = 0; oi < this.game_objects.length; oi++) {
                     const object = this.game_objects[oi];
 
                     if (!object.sentTo[player.id] && object.active && object.visibleToPlayer(player) && player.canSee(object)) {
-                        _sent_objects.push(object);
+                        _sent_objects.push(
+                            object.sid,
+                            UTILS.fixTo(object.x, 1),
+                            UTILS.fixTo(object.y, 1),
+                            object.dir,
+                            object.scale,
+                            object.type,
+                            object.id,
+                            object.owner ? object.owner.sid : -1
+                        );
                         object.sentTo[player.id] = true;
                     }
                 }
 
-                if (_sent_players.length > 0) {
-                    const flat = [];
-                    for (let i = 0; i < _sent_players.length; i++) {
-                        const arr = _sent_players[i];
-                        for (let j = 0; j < arr.length; j++) {
-                            flat.push(arr[j]);
-                        }
-                    }
-                    player.send("a", flat);
-                } else {
-                    player.send("a", null);
-                }
+                player.send("a", _sent_players.length > 0 ? _sent_players : null);
 
                 const aiPayload = [];
-                for (const ai of activeAis) {
+                for (let aiI = 0; aiI < activeAis.length; aiI++) {
+                    const ai = activeAis[aiI];
                     if (!ai.alive) continue;
-                    if (!player.canSee(ai)) {
-                        continue;
-                    }
+                    if (!player.canSee(ai)) continue;
                     aiPayload.push(
                         ai.sid,
                         ai.index,
@@ -212,23 +217,7 @@ export class Game {
                 }
                 player.send("I", aiPayload.length > 0 ? aiPayload : null);
 
-                if (_sent_objects.length > 0) {
-                    const flatObjects = [];
-                    for (let i = 0; i < _sent_objects.length; i++) {
-                        const object = _sent_objects[i];
-                        flatObjects.push(
-                            object.sid,
-                            UTILS.fixTo(object.x, 1),
-                            UTILS.fixTo(object.y, 1),
-                            object.dir,
-                            object.scale,
-                            object.type,
-                            object.id,
-                            object.owner ? object.owner.sid : -1
-                        );
-                    }
-                    player.send("H", flatObjects);
-                }
+                player.send("H", _sent_objects.length > 0 ? _sent_objects : null);
 
                 if (minimap_ext.length === 0) continue;
 

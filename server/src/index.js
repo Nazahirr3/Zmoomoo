@@ -9,7 +9,7 @@ import { Player } from "./moomoo/modules/player.js";
 import { items } from "./moomoo/modules/items.js";
 import { UTILS } from "./moomoo/libs/utils.js";
 import { hats, accessories } from "./moomoo/modules/store.js";
-import { filter_chat } from "./moomoo/libs/filterchat.js";
+import { filter_chat, getMuteDuration, formatMuteDuration, handleDevCommand, isBadChat, resetMuteStateIfNeeded } from "./moomoo/libs/filterchat.js";
 import { config } from "./moomoo/config.js";
 import { ConnectionLimit } from "./moomoo/libs/limit.js";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,7 @@ const INDEX = path.join(CLIENT_DIST_DIR, "html/play.html");
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const SERVER_START_TIME = Date.now();
+const CHAT_MUTE_STORE = new Map();
 const SERVER_METADATA = {
     name: process.env.SERVER_NAME ?? "MooMoo Server",
     type: process.env.SERVER_TYPE ?? (config.isSandbox ? "sandbox" : "standard"),
@@ -42,6 +43,58 @@ const SERVER_METADATA = {
 };
 
 const POINTS_RESOURCE_INDEX = config.resourceTypes ? config.resourceTypes.indexOf("points") : -1;
+
+function isLocalAddress(address) {
+    const value = String(address || "").toLowerCase();
+    return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
+}
+
+function getChatMuteKey(player, addr) {
+    const candidates = [];
+    if (player && typeof player.name === "string" && player.name.trim().length > 0) {
+        candidates.push(player.name.trim().toLowerCase());
+    }
+    if (addr) {
+        candidates.push(String(addr).toLowerCase());
+    }
+    if (player && player.sid) {
+        candidates.push(String(player.sid).toLowerCase());
+    }
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        if (CHAT_MUTE_STORE.has(candidate)) {
+            return candidate;
+        }
+    }
+    return (candidates[0] || "unknown").toLowerCase();
+}
+
+function getChatMuteState(player, addr) {
+    const key = getChatMuteKey(player, addr);
+    const state = CHAT_MUTE_STORE.get(key) || { offenseCount: 0, lastOffenseAt: 0, muteUntil: 0 };
+    player.offenseCount = Number(state.offenseCount) || 0;
+    player.lastOffenseAt = Number(state.lastOffenseAt) || 0;
+    player.muteUntil = Number(state.muteUntil) || 0;
+    resetMuteStateIfNeeded(player);
+    const nextState = {
+        offenseCount: player.offenseCount,
+        lastOffenseAt: player.lastOffenseAt,
+        muteUntil: player.muteUntil
+    };
+    CHAT_MUTE_STORE.set(key, nextState);
+    return nextState;
+}
+
+function persistChatMuteState(player, addr) {
+    const key = getChatMuteKey(player, addr);
+    const state = {
+        offenseCount: Number(player.offenseCount) || 0,
+        lastOffenseAt: Number(player.lastOffenseAt) || 0,
+        muteUntil: Number(player.muteUntil) || 0
+    };
+    CHAT_MUTE_STORE.set(key, state);
+    return state;
+}
 
 if (!fs.existsSync(INDEX)) {
     console.warn("[server] Client build not found. Run `npm run build --workspace client` first.");
@@ -95,6 +148,7 @@ wss.on("connection", async (socket, req) => {
     }
 
     const addr = req.headers["x-forwarded-for"]?.split(",")[0] ?? req.socket.remoteAddress;
+    const localConnection = isLocalAddress(req.socket.remoteAddress);
 
     if (
         colimit.check(addr)
@@ -105,6 +159,18 @@ wss.on("connection", async (socket, req) => {
     colimit.up(addr);
 
     const player = game.addPlayer(socket);
+    player.isMuted = function() {
+        return Boolean(this.muteUntil && this.muteUntil > Date.now());
+    };
+    player.offenseCount = 0;
+    player.lastOffenseAt = 0;
+    player.muteUntil = 0;
+    getChatMuteState(player, addr);
+    player.send("m", {
+        muted: player.isMuted(),
+        until: player.muteUntil || 0,
+        timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+    });
 
     const emit = async (type, ...data) => {
 
@@ -179,7 +245,16 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
-                    player.setUserData(data[0]);
+                    const validName = player.setUserData(data[0]);
+                    if (!validName) {
+                        try {
+                            socket.close(1008, "Your username has been flagged as inappropriate. Please choose a different username to continue playing");
+                        } catch (closeError) {
+                            console.warn("Failed to reject bad username:", closeError);
+                        }
+                        return;
+                    }
+
                     player.spawn(data[0]?.moofoll);
                     player.send("C", player.sid);
 
@@ -434,6 +509,15 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
+                    if (player.isMuted()) {
+                        player.send("m", {
+                            muted: true,
+                            until: player.muteUntil || 0,
+                            timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+                        });
+                        break;
+                    }
+
                     if (player.chat_cooldown > 0) {
                         break;
                     }
@@ -442,14 +526,59 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
-                    const chat = filter_chat(data[0]);
+                    const rawText = data[0].trim();
+                    if (rawText.length === 0 || rawText.length > 30) {
+                        break;
+                    }
+
+                    if (typeof rawText === "string" && rawText.startsWith("!")) {
+                        if (process.env.NODE_ENV !== "production" && localConnection && handleDevCommand(player, rawText)) {
+                            persistChatMuteState(player, addr);
+                            player.send("m", {
+                                muted: player.isMuted(),
+                                until: player.muteUntil || 0,
+                                timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+                            });
+                            break;
+                        }
+                    }
+
+                    if (isBadChat(rawText, {
+                        enabled: config.chatFilterEnabled !== false,
+                        antiBypass: config.chatFilterAntiBypass !== false
+                    })) {
+                        const now = Date.now();
+                        const record = getChatMuteState(player, addr);
+                        if (record && record.lastOffenseAt && (now - record.lastOffenseAt) >= ((Number(config.chatMuteResetDays || 3) * 24 * 60 * 60 * 1000))) {
+                            record.offenseCount = 0;
+                            record.lastOffenseAt = 0;
+                        }
+                        record.offenseCount = (Number(record.offenseCount) || 0) + 1;
+                        record.lastOffenseAt = now;
+                        player.offenseCount = record.offenseCount;
+                        player.lastOffenseAt = record.lastOffenseAt;
+                        player.muteUntil = Math.min(Number.MAX_SAFE_INTEGER, now + getMuteDuration(record.offenseCount));
+                        record.muteUntil = player.muteUntil;
+                        CHAT_MUTE_STORE.set(getChatMuteKey(player, addr), record);
+                        player.send("m", {
+                            muted: true,
+                            until: player.muteUntil,
+                            timeLeft: formatMuteDuration(player.muteUntil - now)
+                        });
+                        break;
+                    }
+
+                    const chat = filter_chat(rawText, {
+                        enabled: config.chatFilterEnabled !== false,
+                        antiBypass: config.chatFilterAntiBypass !== false
+                    });
 
                     if (chat.length === 0) {
                         break;
                     }
 
                     game.server.broadcast("6", player.sid, chat);
-                    player.chat_cooldown = 300;
+                    player.chat_cooldown = config.chatCooldown || 2000;
 
                     break;
                 }

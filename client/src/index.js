@@ -134,6 +134,7 @@ function connectSocket() {
         "5": updateStoreItems,
         "6": receiveChat,
         "7": updateMinimap,
+        "m": receiveMuteState,
         "8": showText,
         "9": pingMap,
         "0": pingSocketResponse
@@ -310,6 +311,10 @@ var mainContext = gameCanvas.getContext("2d");
                 text: "Show CPS: Displays your Clicks Per Second. This shows how fast you are clicking your mouse or pressing keys.",
                 img: "img/settings/show_cps.png"
             },
+            chatFilter: {
+                text: "Chat filter: Blocks filtered language and the common bypass tricks. The server still checks chat for safety even if the toggle is off.",
+                img: "img/settings/show_cps.png"
+            },
             highGraphics: {
                 text: "High Graphics: Enables advanced visual effects like better shadows, smoother animations, and detailed textures. Disable this if you experience lag.",
                 img: "img/settings/high_graphics.png"
@@ -356,6 +361,10 @@ var mainContext = gameCanvas.getContext("2d");
     });
 
 var shutdownDisplay = document.getElementById("shutdownDisplay");
+var errorNotification = document.getElementById("errorNotification");
+var errorNotificationHeader = document.getElementById("errorNotificationHeader");
+var errorNotificationText = document.getElementById("errorNotificationText");
+var errorNotificationClose = document.getElementById("errorNotificationClose");
 var menuCardHolder = document.getElementById("menuCardHolder");
 var guideCard = document.getElementById("guideCard");
 var loadingText = document.getElementById("loadingText");
@@ -481,7 +490,20 @@ gameCanvas.oncontextmenu = function () {
 function disconnect(reason) {
     connected = false;
     io.close();
+    if (typeof reason === "string" && reason.indexOf("Your username has been flagged as inappropriate") !== -1) {
+        inGame = false;
+        loadingText.style.display = "none";
+        menuCardHolder.style.display = "flex";
+        showNameRejected(reason);
+        return;
+    }
     showLoadingText(reason);
+    var errorMessage = reason === "Invalid Connection"
+        ? "The server rejected the connection. Please refresh and try again."
+        : reason === "Socket error"
+            ? "The game could not connect to the server. Check your connection and try again."
+            : "The connection was closed. Please refresh and try again.";
+    showGenericError("Error", errorMessage, "Close");
 }
 
 function showLoadingText(text) {
@@ -497,6 +519,57 @@ function showLoadingText(text) {
     reloadLink.className = 'ytLink';
     reloadLink.textContent = 'reload';
     loadingText.appendChild(reloadLink);
+}
+
+function showGenericError(title, message, closeText) {
+    if (!errorNotification) {
+        alert(message || title || "Something went wrong. Please try again.");
+        return;
+    }
+
+    var safeTitle = title || "Error";
+    var safeMessage = message || "Something went wrong. Please try again.";
+    var safeCloseText = closeText || "Close";
+
+    if (errorNotificationHeader) {
+        errorNotificationHeader.textContent = safeTitle;
+    }
+
+    if (errorNotificationText) {
+        errorNotificationText.textContent = safeMessage;
+    } else if (errorNotification.firstChild) {
+        errorNotification.firstChild.textContent = safeMessage;
+    }
+
+    if (errorNotificationClose) {
+        errorNotificationClose.textContent = safeCloseText;
+    }
+
+    errorNotification.style.display = "flex";
+    if (nameInput) {
+        nameInput.focus();
+    }
+}
+
+function showNameRejected(message) {
+    showGenericError(
+        "Error",
+        message || "Your username has been flagged as inappropriate. Please choose a different username to continue playing",
+        "Close"
+    );
+}
+
+function hideNameRejected() {
+    if (errorNotification) {
+        errorNotification.style.display = "none";
+    }
+}
+
+if (errorNotificationClose) {
+    errorNotificationClose.onclick = function (event) {
+        event.preventDefault();
+        hideNameRejected();
+    };
 }
 
 function bindEvents() {
@@ -1334,6 +1407,13 @@ function prepareUI() {
 
     showPing = getSavedVal("show_ping") == "true";
     showCps = getSavedVal("show_cps") == "true";
+    var chatFilterToggle = document.getElementById("chatFilterEnabled");
+    if (chatFilterToggle) {
+        chatFilterToggle.checked = chatFilterEnabled;
+        chatFilterToggle.onchange = UTILS.checkTrusted(function (e) {
+            setChatFilterEnabled(e.target.checked);
+        });
+    }
     updatePingDisplayVisibility();
 
     setInterval(function () {
@@ -1594,9 +1674,225 @@ function selectSkinColor(index) {
 
 var chatBox = document.getElementById("chatBox");
 var chatHolder = document.getElementById("chatHolder");
+var chatMuteStatus = document.getElementById("chatMuteStatus");
+var chatMuteUntil = 0;
+var chatCooldownUntil = 0;
+var chatUiTimer = null;
+var CHAT_COOLDOWN_MS = config.chatCooldown || 2000;
+var CHAT_MUTE_STORAGE_KEY = "chat_mute_until";
 var chatFilter = new Filter();
+var chatFilterEnabled = getSavedVal("chat_filter_enabled") !== "false";
+
+function normalizeNameForCheck(value) {
+    if (value === null || value === undefined) return "";
+    var text = String(value).toLowerCase();
+    var out = "";
+    var last = "";
+    for (var i = 0; i < text.length; i++) {
+        var ch = text.charAt(i);
+        if (ch === "@") ch = "a";
+        if (ch === "$") ch = "s";
+        if (ch === "!") ch = "i";
+        if (ch === "0") ch = "o";
+        if (ch === "1") ch = "i";
+        if (ch === "3") ch = "e";
+        if (ch === "4") ch = "a";
+        if (ch === "5") ch = "s";
+        if (ch === "7") ch = "t";
+        if (/^[\u200B-\u200D\u2060\uFEFF]$/.test(ch)) continue;
+        if (ch >= "a" && ch <= "z") {
+            if (ch === last) continue;
+            out += ch;
+            last = ch;
+        }
+    }
+    return out;
+}
+
+function isBlockedName(value) {
+    if (!value || typeof value !== "string") return false;
+    var checked = normalizeNameForCheck(value);
+    if (!checked) return false;
+    var safeWords = (config.nameSafeWords || ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria", "german", "austrian"]).map(function (word) {
+        return normalizeNameForCheck(word);
+    });
+    var badWords = (config.nameBadWords || [
+        "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
+        "adolf", "hitler", "hilter", "adolfhitler", "hitleradolf", "hilteradolf",
+        "osama", "binladen", "osamabinladen", "saddam", "hussein", "husseim",
+        "saddamhussein", "saddamhusseim", "germanpainter", "austrianpainter",
+        "nazi", "nazis", "ss",
+        "bbc", "bigblackcock", "bigblackcok", "bigblackc0ck", "cock"
+    ]).map(function (word) {
+        return normalizeNameForCheck(word);
+    });
+    for (var i = 0; i < safeWords.length; i++) {
+        if (safeWords[i] && checked === safeWords[i]) return false;
+    }
+    for (var j = 0; j < badWords.length; j++) {
+        var badWord = badWords[j];
+        if (!badWord) continue;
+        if (badWord.length <= 4 && checked === badWord) return true;
+        if (badWord.length > 4 && checked.indexOf(badWord) !== -1) return true;
+    }
+    return false;
+}
+
+function restoreStoredMuteState() {
+    try {
+        var saved = JSON.parse(localStorage.getItem(CHAT_MUTE_STORAGE_KEY) || "null");
+        if (saved && Number(saved.until) > Date.now()) {
+            chatMuteUntil = Number(saved.until) || 0;
+        } else {
+            chatMuteUntil = 0;
+            localStorage.setItem(CHAT_MUTE_STORAGE_KEY, JSON.stringify({ until: 0 }));
+        }
+    } catch (e) {
+        chatMuteUntil = 0;
+    }
+}
+
+function persistMuteState() {
+    try {
+        localStorage.setItem(CHAT_MUTE_STORAGE_KEY, JSON.stringify({ until: Math.max(0, Number(chatMuteUntil) || 0) }));
+    } catch (e) {
+        // ignore storage issues
+    }
+}
+
+restoreStoredMuteState();
+
+function formatMuteDuration(ms) {
+    var totalMs = Number(ms) || 0;
+    if (totalMs <= 0) return "0s";
+    var totalSec = Math.ceil(totalMs / 1000);
+    var years = Math.floor(totalSec / (52 * 7 * 24 * 60 * 60));
+    totalSec -= years * 52 * 7 * 24 * 60 * 60;
+    var weeks = Math.floor(totalSec / (7 * 24 * 60 * 60));
+    totalSec -= weeks * 7 * 24 * 60 * 60;
+    var days = Math.floor(totalSec / (24 * 60 * 60));
+    totalSec -= days * 24 * 60 * 60;
+    var hours = Math.floor(totalSec / (60 * 60));
+    totalSec -= hours * 60 * 60;
+    var minutes = Math.floor(totalSec / 60);
+    totalSec -= minutes * 60;
+    var seconds = totalSec;
+    var parts = [];
+    if (years > 0) parts.push(years + "y");
+    if (weeks > 0) parts.push(weeks + "w");
+    if (days > 0) parts.push(days + "d");
+    if (hours > 0) parts.push(hours + "h");
+    if (minutes > 0) parts.push(minutes + "m");
+    if (seconds > 0 || parts.length === 0) parts.push(seconds + "s");
+    return parts.join(" ");
+}
+
+function formatCooldownText(ms) {
+    var totalMs = Number(ms) || 0;
+    var seconds = Math.max(0, Math.ceil(totalMs / 1000));
+    return seconds + "s";
+}
+
+function fitMuteInputSize(text) {
+    if (!chatBox) return;
+    var value = String(text || "");
+    var size = 20;
+    if (value.length > 22) size = 18;
+    if (value.length > 28) size = 16;
+    if (value.length > 34) size = 14;
+    if (value.length > 40) size = 12;
+    var width = Math.min(Math.max(value.length * (size * 0.48) + 12, 140), window.innerWidth * 0.9);
+    chatBox.style.fontSize = size + "px";
+    chatBox.style.width = Math.round(width) + "px";
+    chatBox.style.boxSizing = "border-box";
+}
+
+function updateChatMuteUI() {
+    if (!chatBox) return;
+    var now = Date.now();
+    var muted = chatMuteUntil > now;
+    var cooldownLeft = Math.max(0, chatCooldownUntil - now);
+    var onCooldown = cooldownLeft > 0 && !muted;
+
+    if (!muted && chatMuteUntil > 0 && chatMuteUntil <= now) {
+        chatMuteUntil = 0;
+        persistMuteState();
+    }
+
+    chatBox.disabled = muted || onCooldown;
+    chatBox.style.opacity = (muted || onCooldown) ? "0.5" : "1";
+    chatBox.style.cursor = (muted || onCooldown) ? "not-allowed" : "text";
+
+    if (chatMuteStatus) {
+        chatMuteStatus.style.display = "none";
+    }
+
+    if (muted) {
+        var muteText = "You're muted for " + formatMuteDuration(Math.max(0, chatMuteUntil - now));
+        chatBox.value = muteText;
+        chatBox.placeholder = "";
+        fitMuteInputSize(muteText);
+        chatBox.style.color = "rgba(255,255,255,0.7)";
+        chatBox.style.textAlign = "left";
+        chatBox.style.paddingLeft = "12px";
+        chatBox.style.paddingRight = "12px";
+    } else if (onCooldown) {
+        chatBox.value = "";
+        chatBox.placeholder = "Chat cooldown: " + formatCooldownText(cooldownLeft);
+        chatBox.style.color = "#fff";
+        chatBox.style.textAlign = "left";
+        chatBox.style.fontSize = "20px";
+        chatBox.style.width = "220px";
+    } else {
+        chatBox.placeholder = "Enter Message";
+        if (chatBox.value === "" || chatBox.value.indexOf("You're muted for ") === 0 || chatBox.value.indexOf("Chat cooldown: ") === 0) {
+            chatBox.value = "";
+        }
+        chatBox.style.color = "#fff";
+        chatBox.style.textAlign = "left";
+        chatBox.style.fontSize = "20px";
+        chatBox.style.width = "220px";
+    }
+
+    if (!muted && !onCooldown) {
+        persistMuteState();
+    }
+}
+
+if (!chatUiTimer) {
+    chatUiTimer = setInterval(updateChatMuteUI, 250);
+}
+
+function receiveMuteState(data) {
+    var payload = data;
+    if (Array.isArray(data)) {
+        payload = data[0];
+    }
+    if (payload && typeof payload === "object") {
+        chatMuteUntil = Number(payload.until) || 0;
+    } else {
+        chatMuteUntil = Number(payload) || 0;
+    }
+    persistMuteState();
+    updateChatMuteUI();
+}
+
+function setChatFilterEnabled(enabled) {
+    chatFilterEnabled = Boolean(enabled);
+    saveVal("chat_filter_enabled", String(chatFilterEnabled));
+    var toggle = document.getElementById("chatFilterEnabled");
+    if (toggle) toggle.checked = chatFilterEnabled;
+}
 
 function toggleChat() {
+    if (chatMuteUntil > Date.now()) {
+        storeMenu.style.display = "none";
+        allianceMenu.style.display = "none";
+        chatHolder.style.display = "block";
+        chatBox.disabled = true;
+        updateChatMuteUI();
+        return;
+    }
     if (!usingTouch) {
         if (chatHolder.style.display == "block") {
             if (chatBox.value) {
@@ -1609,10 +1905,9 @@ function toggleChat() {
             chatHolder.style.display = "block";
             chatBox.focus();
             resetMoveDir();
-            // И нужно ещё убрать это для чата
         }
     } else {
-        setTimeout(function () { // Timeout lets the `hookTouchEvents` function exit
+        setTimeout(function () {
             var chatMessage = prompt("chat message");
             if (chatMessage) {
                 sendChat(chatMessage);
@@ -1623,6 +1918,16 @@ function toggleChat() {
 }
 
 function sendChat(message) {
+    if (chatMuteUntil > Date.now()) {
+        updateChatMuteUI();
+        return;
+    }
+    if (chatCooldownUntil > Date.now()) {
+        updateChatMuteUI();
+        return;
+    }
+    chatCooldownUntil = Date.now() + CHAT_COOLDOWN_MS;
+    updateChatMuteUI();
     io.send("6", message.slice(0, 30));
 }
 
@@ -1664,10 +1969,16 @@ function escapeRegExp(value) {
 function receiveChat(sid, message) {
     var tmpPlayer = findPlayerBySID(sid);
     if (tmpPlayer) {
-        tmpPlayer.chatMessage = checkProfanityString(message);
+        tmpPlayer.chatMessage = chatFilterEnabled ? checkProfanityString(message) : message;
         tmpPlayer.chatCountdown = config.chatCountdown;
     }
 }
+
+setInterval(function () {
+    if (chatMuteUntil > 0) {
+        updateChatMuteUI();
+    }
+}, 1000);
 
 window.addEventListener('resize', UTILS.checkTrusted(resize));
 
@@ -2027,10 +2338,18 @@ function selectToBuild(index, wpn) {
 function enterGame() {
     saveVal("moo_name", nameInput.value);
     if (!inGame && socketReady()) {
+        var tmpName = nameInput.value || "";
+        if (tmpName.trim() === "") {
+            showNameRejected("Your username has been flagged as inappropriate. Please choose a different username to continue playing");
+            return;
+        }
+        if (isBlockedName(tmpName)) {
+            showNameRejected("Your username has been flagged as inappropriate. Please choose a different username to continue playing");
+            return;
+        }
         inGame = true;
         updatePingDisplayVisibility();
         showLoadingText("Loading...");
-        var tmpName = tmpHasAuth ? nameInput.value : "Guest";
         io.send("M", {
             name: tmpName,
             moofoll: moofoll,
@@ -3501,11 +3820,7 @@ function startGame() {
     loadIcons();
     loadingText.style.display = "none";
     menuCardHolder.style.display = "flex";
-   if (tmpHasAuth) {
-        nameInput.value = getSavedVal("moo_name") || "";
-    } else {
-        nameInput.value = "Guest";
-    }
+    nameInput.value = getSavedVal("moo_name") || "";
     prepareUI();
     initPerformanceDisplay();
 }

@@ -1,7 +1,6 @@
-import { Filter } from "bad-words";
 import { encode } from "msgpack-lite";
+import { isBadName } from "../libs/filterchat.js";
 
-var langFilter = new Filter();
 var mathABS = Math.abs;
 var mathCOS = Math.cos;
 var mathSIN = Math.sin;
@@ -187,31 +186,29 @@ export class Player {
             if (data) {
                 this.name = "unknown";
                 var name = data.name + "";
-                if (name === "Guest") {
-                    this.name = "Guest";
-                } else {
-                    name = name.slice(0, config.maxNameLength);
-                    name = name.replace(/[^\w:\(\)\/? -]+/gmi, " ");
-                    name = name.replace(/[^\x00-\x7F]/g, " ");
-                    name = name.trim();
-                    var isProfane = false;
-                    var convertedName = name.toLowerCase().replace(/\s/g, "").replace(/1/g, "i").replace(/0/g, "o").replace(/5/g, "s");
-                    for (var word of langFilter.list) {
-                        if (convertedName.indexOf(word) != -1) {
-                            isProfane = true;
-                            break;
-                        }
+
+                name = name.slice(0, config.maxNameLength);
+                name = name.replace(/[^\w:\(\)\/? -]+/gmi, " ");
+                name = name.replace(/[^\x00-\x7F]/g, " ");
+                name = name.trim();
+
+                if (name.length === 0 || isBadName(name)) {
+                    this.name = "unknown";
+                    this.skinColor = 0;
+                    if (config.skinColors[data.skin]) {
+                        this.skinColor = data.skin;
                     }
-                    if (name.length > 0 && !isProfane) {
-                        this.name = name;
-                    }
+                    return false;
                 }
 
+                this.name = name;
                 this.skinColor = 0;
                 if (config.skinColors[data.skin]) {
                     this.skinColor = data.skin;
                 }
+                return true;
             }
+            return false;
         };
 
         this.getData = function() {

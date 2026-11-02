@@ -1,95 +1,251 @@
-import { Filter } from "bad-words";
+import { config } from "../config.js";
 
-var chatFilter = new Filter();
-
-var LEET_EQUIVALENTS = {
-    a: "4@",
-    b: "8",
-    c: "(",
-    e: "3",
-    g: "9",
-    i: "1!l|",
-    l: "1!i|",
-    o: "0",
-    s: "5$",
-    t: "7+",
-    z: "2"
+var DAY_MS = 24 * 60 * 60 * 1000;
+var ZERO_WIDTH_REGEX = /[\u200B-\u200D\u2060\uFEFF]/;
+var CONFUSABLES = {
+    a: "a", e: "e", i: "i", o: "o", s: "s", t: "t",
+    A: "a", E: "e", I: "i", O: "o", S: "s", T: "t",
+    "а": "a", "е": "e", "і": "i", "ο": "o", "ѕ": "s",
+    "Α": "a", "Ε": "e", "Ι": "i", "Ο": "o", "Σ": "s",
+    "α": "a", "ε": "e", "ι": "i", "σ": "s", "ς": "s", "τ": "t",
+    "ａ": "a", "ｅ": "e", "ｉ": "i", "ｏ": "o", "ｓ": "s",
+    "ｔ": "t"
+};
+var LEET_MAP = {
+    "0": "o",
+    "1": "i",
+    "2": "z",
+    "3": "e",
+    "4": "a",
+    "5": "s",
+    "6": "g",
+    "7": "t",
+    "8": "b",
+    "9": "g",
+    "@": "a",
+    "$": "s",
+    "!": "i",
+    "|": "i",
+    "+": "t",
+    "(": "c",
+    ")": "c",
+    "[": "c",
+    "]": "c",
+    "{": "c",
+    "}": "c"
 };
 
-var compiled = [];
+var BAD_WORDS = (config.chatBadWords || [
+    "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
+    "hoe", "slut", "pussy", "dick", "faggot", "whore", "bitch", "cunt"
+]).map(function(word) {
+    return String(word).toLowerCase();
+});
 
-// build regexes once
-(function buildList() {
-    for (var i = 0; i < chatFilter.list.length; i++) {
-        var term = chatFilter.list[i];
-        if (!term || typeof term !== "string") continue;
-        var key = term.toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (!key) continue;
-        try {
-            var pattern = buildVariantPattern(key);
-            compiled.push({
-                rg: new RegExp(pattern, "gi"),
-                repl: buildReplacement(term.length)
-            });
-        } catch (e) {
-            // fallback to exact match if anything goes wrong
-            try {
-                compiled.push({
-                    rg: new RegExp(escapeRegExp(term), "gi"),
-                    repl: buildReplacement(term.length)
-                });
-            } catch (ee) { }
+var BAD_NAME_WORDS = (config.nameBadWords || [
+    "nigger", "nigga", "niga", "ngga", "ngger", "nggr", "ngr", "nga", "nig",
+    "adolf", "hitler", "hilter", "adolfhitler", "hitleradolf", "hilteradolf",
+    "osama", "binladen", "osamabinladen", "saddam", "hussein", "husseim",
+    "saddamhussein", "saddamhusseim", "germanpainter", "austrianpainter",
+    "nazi", "nazis", "ss",
+    "bbc", "bigblackcock", "bigblackcok", "bigblackc0ck", "cock"
+]).map(function(word) {
+    return String(word).toLowerCase();
+});
+
+var SAFE_WORDS = (config.chatSafeWords || ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria"]).map(function(word) {
+    return normalizeInput(word);
+});
+
+var SAFE_NAME_WORDS = (config.nameSafeWords || ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria", "german", "austrian"]).map(function(word) {
+    return normalizeInput(word);
+});
+
+var NORMALIZED_BAD_WORDS = BAD_WORDS.map(normalizeInput).filter(Boolean);
+var NORMALIZED_BAD_NAME_WORDS = BAD_NAME_WORDS.map(normalizeInput).filter(Boolean);
+
+function normalizeInput(value) {
+    if (value === null || value === undefined) return "";
+
+    var text = String(value).toLowerCase();
+    var out = "";
+    var last = "";
+
+    for (var i = 0; i < text.length; i++) {
+        var ch = text.charAt(i);
+        var mapped = CONFUSABLES[ch] || LEET_MAP[ch] || ch;
+
+        if (mapped === "" || ZERO_WIDTH_REGEX.test(mapped)) {
+            continue;
         }
-    }
-})();
 
-export const filter_chat = function(chat) {
+        if (mapped >= "0" && mapped <= "9") {
+            mapped = LEET_MAP[mapped] || "";
+        }
+
+        if (mapped < "a" || mapped > "z") {
+            continue;
+        }
+
+        if (mapped === last) {
+            continue;
+        }
+
+        out += mapped;
+        last = mapped;
+    }
+
+    return out;
+}
+
+export function normalizeMessage(message) {
+    return normalizeInput(message);
+}
+
+export function isBadName(name) {
+    if (!name || typeof name !== "string") return false;
+
+    var checked = normalizeInput(name);
+    if (!checked) return false;
+
+    for (var i = 0; i < SAFE_NAME_WORDS.length; i++) {
+        if (!SAFE_NAME_WORDS[i]) continue;
+        if (checked === SAFE_NAME_WORDS[i]) return false;
+    }
+
+    for (var j = 0; j < NORMALIZED_BAD_NAME_WORDS.length; j++) {
+        var badWord = NORMALIZED_BAD_NAME_WORDS[j];
+        if (!badWord) continue;
+
+        if (badWord.length <= 4) {
+            if (checked === badWord) return true;
+            continue;
+        }
+
+        if (checked.indexOf(badWord) !== -1) return true;
+    }
+
+    return false;
+}
+
+export function filter_chat(chat, options) {
     if (!chat || typeof chat !== "string") return "";
 
-    var s = sanitizeMessage(chat);
+    var enabled = options && typeof options.enabled === "boolean" ? options.enabled : config.chatFilterEnabled !== false;
+    var antiBypass = options && typeof options.antiBypass === "boolean" ? options.antiBypass : config.chatFilterAntiBypass !== false;
 
-    for (var i = 0; i < compiled.length; i++) {
-        s = s.replace(compiled[i].rg, compiled[i].repl);
+    if (!enabled) {
+        return chat.trim();
     }
 
-    return s;
-};
+    return isBadChat(chat, { enabled: enabled, antiBypass: antiBypass }) ? "" : chat.trim();
+}
 
-function sanitizeMessage(input) {
-    var truncated = (input + "").slice(0, 300);
-    var out = "";
-    for (var i = 0; i < truncated.length; i++) {
-        var ch = truncated.charAt(i);
-        var cp = truncated.charCodeAt(i);
-        if (cp >= 32 && cp <= 126) out += ch;
+export function isBadChat(raw, options) {
+    if (!raw || typeof raw !== "string") return false;
+
+    var enabled = options && typeof options.enabled === "boolean" ? options.enabled : config.chatFilterEnabled !== false;
+    if (!enabled) return false;
+
+    var antiBypass = options && typeof options.antiBypass === "boolean" ? options.antiBypass : config.chatFilterAntiBypass !== false;
+    var checked = antiBypass ? normalizeInput(raw) : raw.toLowerCase().replace(/[^a-z]/g, "");
+
+    if (!checked) return false;
+
+    for (var i = 0; i < SAFE_WORDS.length; i++) {
+        if (!SAFE_WORDS[i]) continue;
+        if (checked === SAFE_WORDS[i]) return false;
     }
-    // collapse whitespace and trim
-    return out.replace(/\s+/g, " ").trim();
+
+    for (var j = 0; j < NORMALIZED_BAD_WORDS.length; j++) {
+        var badWord = NORMALIZED_BAD_WORDS[j];
+        if (!badWord) continue;
+
+        if (badWord.length <= 4) {
+            if (checked === badWord) return true;
+            continue;
+        }
+
+        if (checked.indexOf(badWord) !== -1) return true;
+    }
+
+    return false;
 }
 
-function buildReplacement(length) {
-    if (!length) return "";
-    return "M" + "o".repeat(Math.max(length - 1, 0));
+export function getMuteDuration(offenseCount) {
+    var count = Number(offenseCount) || 0;
+    if (count < 1) count = 1;
+
+    var base = Number(config.chatMuteStart) || 5 * 60 * 1000;
+    var cap = Number(config.chatMuteCap) || Number.MAX_SAFE_INTEGER;
+    var total = base * Math.pow(2, count - 1);
+
+    if (!Number.isFinite(total)) return cap;
+    return Math.min(Math.max(total, 0), cap);
 }
 
-function escapeRegExp(value) {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+export function formatMuteDuration(ms) {
+    var totalMs = Number(ms) || 0;
+    if (totalMs <= 0) return "0s";
 
-function escapeForClass(s) {
-    return s.replace(/[-\]^\\]/g, "\\$&");
-}
+    var totalSec = Math.ceil(totalMs / 1000);
+    var years = Math.floor(totalSec / (52 * 7 * 24 * 60 * 60));
+    totalSec -= years * 52 * 7 * 24 * 60 * 60;
+    var weeks = Math.floor(totalSec / (7 * 24 * 60 * 60));
+    totalSec -= weeks * 7 * 24 * 60 * 60;
+    var days = Math.floor(totalSec / (24 * 60 * 60));
+    totalSec -= days * 24 * 60 * 60;
+    var hours = Math.floor(totalSec / (60 * 60));
+    totalSec -= hours * 60 * 60;
+    var minutes = Math.floor(totalSec / 60);
+    totalSec -= minutes * 60;
+    var seconds = totalSec;
 
-function buildVariantPattern(key) {
-    // For each char, include the letter + leet equivalents, allow repeats and separators
     var parts = [];
-    for (var i = 0; i < key.length; i++) {
-        var ch = key.charAt(i);
-        var eq = LEET_EQUIVALENTS[ch] || "";
-        var cls = ch + eq;
-        cls = escapeForClass(cls);
-        // class + one-or-more repeats, then any non-alnum separators (zero or more)
-        parts.push("[" + cls + "]+[^a-z0-9]*");
+    if (years > 0) parts.push(years + "y");
+    if (weeks > 0) parts.push(weeks + "w");
+    if (days > 0) parts.push(days + "d");
+    if (hours > 0) parts.push(hours + "h");
+    if (minutes > 0) parts.push(minutes + "m");
+    if (seconds > 0 || parts.length === 0) parts.push(seconds + "s");
+
+    return parts.join(" ");
+}
+
+export function handleDevCommand(player, text) {
+    if (!player || !text || typeof text !== "string") return false;
+
+    var value = text.trim();
+
+    if (value === "!mute10") {
+        player.muteUntil = Date.now() + 10000;
+        return true;
     }
-    return parts.join("");
+
+    var match = value.match(/^!resetoffense\s+(\d+(?:\.\d+)?)$/i);
+    if (match) {
+        var days = Number(match[1]);
+        if (!Number.isFinite(days) || days < 0) days = 0;
+        days = Math.min(days, Number.MAX_SAFE_INTEGER / DAY_MS);
+        player.lastOffenseAt = Date.now() - (days * DAY_MS);
+        player.muteUntil = 0;
+        return true;
+    }
+
+    return false;
+}
+
+export function resetMuteStateIfNeeded(player) {
+    if (!player) return;
+
+    var now = Date.now();
+    var resetMs = Number(config.chatMuteResetDays || 3) * DAY_MS;
+
+    if (player.lastOffenseAt && (now - player.lastOffenseAt) >= resetMs) {
+        player.offenseCount = 0;
+        player.lastOffenseAt = 0;
+        if (player.muteUntil && player.muteUntil <= now) {
+            player.muteUntil = 0;
+        }
+    }
 }

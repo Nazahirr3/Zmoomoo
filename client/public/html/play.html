@@ -78,11 +78,9 @@
     <script src="/libs/jquery-3.2.1.min.js"></script>
     <script src="/libs/jquery-ui.js"></script>
     <div id="errorNotification" class="menuCard" style="display:none">
-        <div>It looks like zmoomoo ran in to a problem. Please try <a target="_blank"
-                href="https://www.computerhope.com/issues/ch001411.htm">disabling all of your browser extensions</a> and
-            reloading the page.</div>
-        <div style="text-align:center"><a onclick="errorNotification.style.display = 'none' "
-                style="cursor:pointer">Hide</a></div>
+        <div id="errorNotificationHeader">Error</div>
+        <div id="errorNotificationText">It looks like zmoomoo ran in to a problem. Please try disabling all of your browser extensions and reloading the page.</div>
+        <div id="errorNotificationActions"><a id="errorNotificationClose" href="#">Close</a></div>
     </div>
     <div id="shutdownDisplay" hidden></div>
     <div id="mainMenu">
@@ -353,6 +351,14 @@
                                             </div>
                                             <div class="settingItem">
                                                 <div class="settingLabel">
+                                                    <div class="settingHelp" data-setting="chatFilter" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
+                                                    <i class="material-icons">gpp_maybe</i>
+                                                    <span>Chat filter</span>
+                                                </div>
+                                                <input id="chatFilterEnabled" type="checkbox" class="settingCheckbox" checked />
+                                            </div>
+                                            <div class="settingItem">
+                                                <div class="settingLabel">
                                                     <div class="settingHelp" data-setting="highGraphics" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
                                                     <i class="material-icons">hd</i>
                                                     <span>High Graphics</span>
@@ -486,7 +492,10 @@
     <div id="touch-controls-right"></div>
     <div id="touch-controls-fullscreen"></div>
     <div id="gameUI" style="display:none">
-        <div id="chatHolder" style="display:none"><input id="chatBox" placeholder="Enter Message" maxlength="30"></div>
+        <div id="chatHolder" style="display:none">
+            <div id="chatMuteStatus" style="display:none; color:rgba(255,255,255,0.75); background:transparent; border:none; padding:0; margin:0 auto 6px; font-size:18px; font-weight:700; line-height:1.1; white-space:nowrap; text-shadow:0 1px 2px rgba(0,0,0,0.6); max-width:90vw; overflow:hidden; text-overflow:ellipsis;">You're muted for 0s</div>
+            <input id="chatBox" placeholder="Enter Message" maxlength="30" style="opacity: 1; width: 220px; max-width: 90vw; display:block; margin:0 auto; text-align:left; padding:6px 12px;">
+        </div>
         <div id="upgradeHolder"></div>
         <div id="upgradeCounter"></div>
         <div id="topInfoHolder">

@@ -1,6 +1,3 @@
-var LangFilter = require("bad-words");
-var langFilter = new LangFilter();
-
 var mathABS = Math.abs;
 var mathCOS = Math.cos;
 var mathSIN = Math.sin;
@@ -126,6 +123,66 @@ module.exports = function (id, sid, config, UTILS, projectileManager,
         return false;
     };
 
+    function normalizeNameCheck(value) {
+        if (value === null || value === undefined) return "";
+
+        var text = String(value).toLowerCase();
+        var out = "";
+        var last = "";
+        for (var i = 0; i < text.length; i++) {
+            var ch = text.charAt(i);
+            if (ch === "@") ch = "a";
+            if (ch === "$") ch = "s";
+            if (ch === "!") ch = "i";
+            if (ch === "0") ch = "o";
+            if (ch === "1") ch = "i";
+            if (ch === "3") ch = "e";
+            if (ch === "4") ch = "a";
+            if (ch === "5") ch = "s";
+            if (ch === "7") ch = "t";
+            if (/^[\u200B-\u200D\u2060\uFEFF]$/.test(ch)) continue;
+            if (ch >= "a" && ch <= "z") {
+                if (ch === last) continue;
+                out += ch;
+                last = ch;
+            }
+        }
+        return out;
+    }
+
+    function isBadNameString(value) {
+        if (!value || typeof value !== "string") return false;
+
+        var checked = normalizeNameCheck(value);
+        if (!checked) return false;
+
+        var safeWords = (config.nameSafeWords || ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria", "german", "austrian"]).map(function (word) {
+            return normalizeNameCheck(word);
+        });
+        var badWords = (config.nameBadWords || [
+            "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
+            "adolf", "hitler", "hilter", "adolfhitler", "hitleradolf", "hilteradolf",
+            "osama", "binladen", "osamabinladen", "saddam", "hussein", "husseim",
+            "saddamhussein", "saddamhusseim", "germanpainter", "austrianpainter",
+            "nazi", "nazis", "ss"
+        ]).map(function (word) {
+            return normalizeNameCheck(word);
+        });
+
+        for (var i = 0; i < safeWords.length; i++) {
+            if (safeWords[i] && checked === safeWords[i]) return false;
+        }
+
+        for (var j = 0; j < badWords.length; j++) {
+            var badWord = badWords[j];
+            if (!badWord) continue;
+            if (badWord.length <= 4 && checked === badWord) return true;
+            if (badWord.length > 4 && checked.indexOf(badWord) !== -1) return true;
+        }
+
+        return false;
+    }
+
     this.setUserData = function (data) {
         if (data) {
 
@@ -133,19 +190,11 @@ module.exports = function (id, sid, config, UTILS, projectileManager,
 
             var name = data.name + "";
             name = name.slice(0, config.maxNameLength);
-            name = name.replace(/[^\w:\(\)\/? -]+/gmi, " "); // USE SPACE SO WE CAN CHECK PROFANITY
+            name = name.replace(/[^\w:\(\)\/? -]+/gmi, " ");
             name = name.replace(/[^\x00-\x7F]/g, " ");
             name = name.trim();
 
-            var isProfane = false;
-            var convertedName = name.toLowerCase().replace(/\s/g, "").replace(/1/g, "i").replace(/0/g, "o").replace(/5/g, "s");
-            for (var word of langFilter.list) {
-                if (convertedName.indexOf(word) != -1) {
-                    isProfane = true;
-                    break;
-                }
-            }
-            if (name.length > 0 && !isProfane) {
+            if (name.length > 0 && !isBadNameString(name)) {
                 this.name = name;
             }
 

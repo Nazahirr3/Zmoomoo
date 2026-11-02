@@ -142,7 +142,26 @@ var groupedConfig = {
 
     chat: {
         chatCountdown: 3000,  // ms
-        chatCooldown: 500     // ms
+        chatCooldown: 2000,    // ms
+        chatFilterEnabled: true,
+        chatFilterAntiBypass: true,
+        chatMuteStart: 5 * 60 * 1000,
+        chatMuteCap: 9007199254740991,
+        chatMuteResetDays: 3,
+        chatBadWords: [
+            "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
+            "hoe", "slut", "pussy", "dick", "faggot", "whore", "bitch", "cunt"
+        ],
+        chatSafeWords: ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria"],
+        nameBadWords: [
+            "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
+            "adolf", "hitler", "hilter", "adolfhitler", "hitleradolf", "hilteradolf",
+            "osama", "binladen", "osamabinladen", "saddam", "hussein", "husseim",
+            "saddamhussein", "saddamhusseim", "germanpainter", "austrianpainter",
+            "nazi", "nazis", "ss",
+            "bbc", "bigblackcock", "bigblackcok", "bigblackc0ck", "cock"
+        ],
+        nameSafeWords: ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria", "german", "austrian"]
     },
 
     sandbox: {

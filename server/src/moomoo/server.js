@@ -1,4 +1,3 @@
-
 import { Player } from "./modules/player.js";
 import { AI } from "./modules/ai.js";
 import { UTILS } from "./libs/utils.js";
@@ -24,17 +23,14 @@ export class Game {
     game_objects = [];
 
     server = {
-        broadcast: async (type, ...data) => {
+        broadcast: (type, ...data) => {
+            const payload = encode([type, data]);
             for (const player of this.players) {
                 if (!player.socket) continue;
-                player.socket.send(encode([
-                    type,
-                    data
-                ]));
+                player.socket.send(payload);
             }
-
         },
-        send: async (playerId, type, ...data) => {
+        send: (playerId, type, ...data) => {
             if (!playerId) return;
             const target = this.players.find(p => p.id === playerId);
             if (!target || !target.socket) return;
@@ -66,8 +62,11 @@ export class Game {
         const nano = (1000 / config.serverUpdateRate);
         const timer = new NanoTimer;
 
-        let last = 0;
+        let last = performance.now();
         let minimap_cd = config.minimapRate;
+        const minimap_ext = [];
+        let _sent_players = [];
+        let _sent_objects = [];
 
         setInterval(() => {
 
@@ -79,15 +78,15 @@ export class Game {
             let kills = 0;
             let leader = null;
 
-            const updt_map = minimap_cd <= 0;
+            const upd_map = minimap_cd <= 0;
 
-            if (updt_map) {
+            if (upd_map) {
                 minimap_cd = config.minimapRate;
             } else {
                 minimap_cd -= delta;
             }
 
-            const minimap_ext = [];
+            minimap_ext.length = 0;
 
             for (const player of this.players) {
 
@@ -101,7 +100,7 @@ export class Game {
                     leader = player;
                 }
 
-                if (updt_map) {
+                if (upd_map) {
                     minimap_ext.push({
                         sid: player.sid,
                         x: player.x,
@@ -121,29 +120,48 @@ export class Game {
             this.updateTurrets(delta);
 
             {
+                const metric = (player) => player.points;
+                const maxEntries = Math.min(config.leaderboardMaxPlayers || 10, this.players.length);
+                const top = [];
 
-                const metric = (player) => player.points
-                const sort = this.players.filter(x => x.alive).sort((a, b) => {
-                    return metric(b) - metric(a);
-                });
-                const sorts = [];
-                const maxEntries = Math.min(config.leaderboardMaxPlayers || 10, sort.length);
-                for (let i = 0; i < maxEntries; i++) {
-                    sorts.push(sort[i]);
+                for (let i = 0; i < this.players.length; i++) {
+                    const p = this.players[i];
+                    if (!p.alive) continue;
+                    const score = metric(p);
+
+                    let j = 0;
+                    while (j < top.length && metric(top[j]) >= score) j++;
+                    if (j < maxEntries) {
+                        top.splice(j, 0, p);
+                        if (top.length > maxEntries) top.pop();
+                    } else if (top.length < maxEntries) {
+                        top.push(p);
+                    }
                 }
 
-                this.server.broadcast("G", sorts.flatMap(p => [p.sid, p.name, metric(p)]));
-
+                const payload = [];
+                for (let i = 0; i < top.length; i++) {
+                    const p = top[i];
+                    payload.push(p.sid, p.name, metric(p));
+                }
+                this.server.broadcast("G", payload);
             }
 
-            const activeAis = this.ais.filter(ai => ai.active);
+            // build activeAis once
+            const activeAis = [];
+            for (let aiI = 0; aiI < this.ais.length; aiI++) {
+                const a = this.ais[aiI];
+                if (a.active) activeAis.push(a);
+            }
 
+            // reuse flat arrays to avoid allocations
             for (const player of this.players) {
 
-                const sent_players = [];
-                const sent_objects = [];
-            
-                for (const player2 of this.players) {
+                _sent_players.length = 0; // now used as flat list of values
+                _sent_objects.length = 0;
+
+                for (let i2 = 0; i2 < this.players.length; i2++) {
+                    const player2 = this.players[i2];
 
                     if (!player.canSee(player2) || !player2.alive) {
                         continue;
@@ -157,30 +175,36 @@ export class Game {
                         player2.needsResourceSync = false;
                         player2.syncResources();
                     }
-                    sent_players.push(player2.getInfo());
 
+                    const info = player2.getInfo();
+                    for (let j = 0; j < info.length; j++) _sent_players.push(info[j]);
                 }
 
-                for (const object of this.game_objects) {
+                for (let oi = 0; oi < this.game_objects.length; oi++) {
+                    const object = this.game_objects[oi];
 
-                    if (
-                        !object.sentTo[player.id] && object.active && object.visibleToPlayer(player) && player.canSee(object)
-                    ) {
-                        sent_objects.push(object);
+                    if (!object.sentTo[player.id] && object.active && object.visibleToPlayer(player) && player.canSee(object)) {
+                        _sent_objects.push(
+                            object.sid,
+                            UTILS.fixTo(object.x, 1),
+                            UTILS.fixTo(object.y, 1),
+                            object.dir,
+                            object.scale,
+                            object.type,
+                            object.id,
+                            object.owner ? object.owner.sid : -1
+                        );
                         object.sentTo[player.id] = true;
                     }
-
                 }
 
-                player.send("a", sent_players.flatMap(data => data));
+                player.send("a", _sent_players.length > 0 ? _sent_players : null);
 
-                // ais
                 const aiPayload = [];
-                for (const ai of activeAis) {
+                for (let aiI = 0; aiI < activeAis.length; aiI++) {
+                    const ai = activeAis[aiI];
                     if (!ai.alive) continue;
-                    if (!player.canSee(ai)) {
-                        continue;
-                    }
+                    if (!player.canSee(ai)) continue;
                     aiPayload.push(
                         ai.sid,
                         ai.index,
@@ -193,35 +217,20 @@ export class Game {
                 }
                 player.send("I", aiPayload.length > 0 ? aiPayload : null);
 
-                if (sent_objects.length > 0) {
-                    player.send("H", sent_objects.flatMap(object => [
-                        object.sid,
-                        UTILS.fixTo(object.x, 1),
-                        UTILS.fixTo(object.y, 1),
-                        object.dir,
-                        object.scale,
-                        object.type,
-                        object.id,
-                        object.owner ? object.owner.sid : -1
-                    ]));
-                }
+                player.send("H", _sent_objects.length > 0 ? _sent_objects : null);
 
                 if (minimap_ext.length === 0) continue;
 
-                const filteredMinimap = minimap_ext.filter(target => {
-                    if (target.sid === player.sid) {
-                        return false;
-                    }
-                    if (config.isSandbox) {
-                        return true;
-                    }
-                    if (player.team && target.team !== player.team) {
-                        return false;
-                    }
-                    return true;
-                });
-
-                player.send("7", filteredMinimap.flatMap(x => [x.x, x.y]));
+                const coords = [];
+                for (let mi = 0; mi < minimap_ext.length; mi++) {
+                    const target = minimap_ext[mi];
+                    if (target.sid === player.sid) continue;
+                    if (!config.isSandbox && player.team && target.team !== player.team) continue;
+                    coords.push(target.x, target.y);
+                }
+                if (coords.length > 0) {
+                    player.send("7", coords);
+                }
 
             }
 

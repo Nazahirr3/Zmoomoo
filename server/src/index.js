@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { WebSocketServer } from "ws";
 import { createServer } from "node:http";
+import { rateLimit } from "express-rate-limit";
 import { decode, encode } from "msgpack-lite";
 import { Game } from "./moomoo/server.js";
 import { Player } from "./moomoo/modules/player.js";
@@ -15,6 +16,12 @@ import { ConnectionLimit } from "./moomoo/libs/limit.js";
 import { fileURLToPath } from "node:url";
 
 const app = e();
+const publicRateLimit = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 60,
+    standardHeaders: "draft-8",
+    legacyHeaders: false
+});
 
 
 app.use(e.json()); // Add JSON body parser for API requests 
@@ -102,11 +109,11 @@ if (!fs.existsSync(INDEX)) {
 
 const game = new Game;
 
-app.get("/", (req, res) => {
+app.get("/", publicRateLimit, (req, res) => {
     res.sendFile(INDEX)
 });
 
-app.get("/ping", (_req, res) => {
+app.get("/ping", publicRateLimit, (_req, res) => {
     const activePlayers = game.players.filter(player => player.alive);
     res.json({
         status: "ok",
@@ -133,7 +140,7 @@ app.get("/ping", (_req, res) => {
     });
 });
 
-app.get("/play", (req, res) => {
+app.get("/play", publicRateLimit, (req, res) => {
     res.sendFile(INDEX);
 });
 

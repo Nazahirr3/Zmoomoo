@@ -879,7 +879,8 @@ $.fn.position = function( options ) {
 	options = $.extend( {}, options );
 
 	var atOffset, targetWidth, targetHeight, targetOffset, basePosition, dimensions,
-		target = $( options.of ),
+		target = typeof options.of === "string" ?
+			$( document.querySelectorAll( options.of ) ) : $( options.of ),
 		within = $.position.getWithinInfo( options.within ),
 		scrollInfo = $.position.getScrollInfo( within ),
 		collision = ( options.collision || "flip" ).split( " " ),
@@ -4135,9 +4136,8 @@ var keycode = $.ui.keyCode = {
 
 // Internal use only
 var escapeSelector = $.ui.escapeSelector = ( function() {
-	var selectorEscape = /([!"#$%&'()*+,./:;<=>?@[\]^`{|}~])/g;
 	return function( selector ) {
-		return selector.replace( selectorEscape, "\\$1" );
+		return $.escapeSelector( selector );
 	};
 } )();
 
@@ -7388,7 +7388,7 @@ $.extend( Datepicker.prototype, {
 			inst.append.remove();
 		}
 		if ( appendText ) {
-			inst.append = $( "<span class='" + this._appendClass + "'>" + appendText + "</span>" );
+			inst.append = $( "<span>" ).addClass( this._appendClass ).text( appendText );
 			input[ isRTL ? "before" : "after" ]( inst.append );
 		}
 
@@ -8238,7 +8238,8 @@ $.extend( Datepicker.prototype, {
 			altFormat = this._get( inst, "altFormat" ) || this._get( inst, "dateFormat" );
 			date = this._getDate( inst );
 			dateStr = this.formatDate( altFormat, date, this._getFormatConfig( inst ) );
-			$( altField ).val( dateStr );
+			( typeof altField === "string" ?
+				$( document.querySelectorAll( altField ) ) : $( altField ) ).val( dateStr );
 		}
 	},
 
@@ -17588,7 +17589,7 @@ $.widget( "ui.tabs", {
 	},
 
 	_sanitizeSelector: function( hash ) {
-		return hash ? hash.replace( /[!"$%&'()*+,.\/:;<=>?@\[\]\^`{|}~]/g, "\\$&" ) : "";
+		return hash ? $.escapeSelector( hash ) : "";
 	},
 
 	refresh: function() {

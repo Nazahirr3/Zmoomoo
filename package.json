@@ -18,12 +18,9 @@
     "cors": "^2.8.5",
     "node-fetch": "^3.3.2"
   },
-  "devDependencies": {
-    "puppeteer": "^24.29.1"
-  },
   "overrides": {
     "braces": "^3.0.3",
-    "body-parser": "2.2.1",
+    "body-parser": "^2.4.0",
     "js-yaml": "^4.1.1"
   }
 }

@@ -880,7 +880,7 @@ $.fn.position = function( options ) {
 
 	var atOffset, targetWidth, targetHeight, targetOffset, basePosition, dimensions,
 		target = typeof options.of === "string" ?
-			$( document.querySelectorAll( options.of ) ) : $( options.of ),
+			$( document.querySelector( options.of ) ) : $( options.of ),
 		within = $.position.getWithinInfo( options.within ),
 		scrollInfo = $.position.getScrollInfo( within ),
 		collision = ( options.collision || "flip" ).split( " " ),

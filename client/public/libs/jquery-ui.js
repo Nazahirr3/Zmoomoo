@@ -879,12 +879,21 @@ $.fn.position = function( options ) {
 	options = $.extend( {}, options );
 
 	var atOffset, targetWidth, targetHeight, targetOffset, basePosition, dimensions,
-		target = typeof options.of === "string" ?
-			$( document.querySelector( options.of ) ) : $( options.of ),
+		target,
 		within = $.position.getWithinInfo( options.within ),
 		scrollInfo = $.position.getScrollInfo( within ),
 		collision = ( options.collision || "flip" ).split( " " ),
 		offsets = {};
+
+	if ( typeof options.of === "string" ) {
+		try {
+			target = $( document.querySelector( options.of ) );
+		} catch ( e ) {
+			target = $();
+		}
+	} else {
+		target = $( options.of );
+	}
 
 	dimensions = getDimensions( target );
 	if ( target[ 0 ].preventDefault ) {

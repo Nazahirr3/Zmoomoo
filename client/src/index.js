@@ -91,20 +91,37 @@ function connectSocketIfReady() {
 function connectSocket() {
     let wsAddress = window.location.href.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
 
-    io.connect(wsAddress, function (error) {
-        pingSocket();
-        setInterval(pingSocket, 2500);
-
-        if (error) {
-            disconnect(error);
-        } else {
-            connected = true;
-            startGame();
+    fetch("/api/join-token", {
+        method: "POST",
+        credentials: "same-origin"
+    }).then(function (response) {
+        if (!response.ok) throw new Error("The server couldn't prepare your game session.");
+        return response.json();
+    }).then(function (data) {
+        if (!data || typeof data.token !== "string") {
+            throw new Error("The server returned an invalid game session.");
         }
-    }, {
+
+        io.connect(wsAddress, function (error) {
+            if (error) {
+                disconnect(error);
+            } else {
+                io.send("A", data.token);
+            }
+        }, {
+        "j": function () {
+            connected = true;
+            pingSocket();
+            setInterval(pingSocket, 2500);
+            startGame();
+        },
         "A": setInitData,
         "B": disconnect,
         "C": setupGame,
+        "own": updateOwnerStatus,
+        "oid": updateOwnerRoster,
+        "os": updateShownOwners,
+        "pl": receivePlayersList,
         "D": addPlayer,
         "E": removePlayer,
         "a": updatePlayers,
@@ -132,13 +149,20 @@ function connectSocket() {
         "2": allianceNotification,
         "3": setPlayerTeam,
         "4": setAlliancePlayers,
+        "cl": showClanRateLimit,
         "5": updateStoreItems,
         "6": receiveChat,
         "7": updateMinimap,
         "m": receiveMuteState,
+        "w": receivePrivateMessage,
         "8": showText,
+        "gm": showGlobalAnnouncement,
         "9": pingMap,
         "0": pingSocketResponse
+        });
+    }).catch(function (error) {
+        console.error("Could not start an authenticated game connection:", error);
+        showGenericError("Connection error", error.message || "The game could not prepare a session.", "reload");
     });
 }
 
@@ -223,6 +247,9 @@ var lastUpdate = Date.now();
 var keys, attackState;
 var ais = [];
 var players = [];
+var ownerAccountIds = Object.create(null);
+var shownOwnerIds = Object.create(null);
+var hasOwnerTools = false;
 var alliances = [];
 var gameObjects = [];
 var projectiles = [];
@@ -377,6 +404,18 @@ var woodDisplay = document.getElementById("woodDisplay");
 var stoneDisplay = document.getElementById("stoneDisplay");
 var killCounter = document.getElementById("killCounter");
 var leaderboardData = document.getElementById("leaderboardData");
+var leaderboardDataBack = document.getElementById("leaderboardDataBack");
+var leaderboardScene = document.getElementById("leaderboardScene");
+var leaderboardCard = document.getElementById("leaderboardCard");
+var leaderboardFlip = document.getElementById("leaderboardFlip");
+var leaderboard = document.getElementById("leaderboard");
+var leaderboardTitle = document.getElementById("leaderboardTitle");
+var leaderboardButton = document.getElementById("leaderboardButton");
+var leaderboardSide = 0;
+var leaderboardEntries = [];
+var chatRoster = document.getElementById("chatRoster");
+var chatRosterLongestText = 0;
+var chatRosterColumns = 1;
 var nameInput = document.getElementById("nameInput");
 var itemInfoHolder = document.getElementById("itemInfoHolder");
 var ageText = document.getElementById("ageText");
@@ -386,6 +425,11 @@ var upgradeCounter = document.getElementById("upgradeCounter");
 var allianceMenu = document.getElementById("allianceMenu");
 var allianceHolder = document.getElementById("allianceHolder");
 var allianceManager = document.getElementById("allianceManager");
+var clanRateLimit = document.getElementById("clanRateLimit");
+var clanRateLimitTimerText = document.getElementById("clanRateLimitTimer");
+var clanRateLimitClose = document.getElementById("clanRateLimitClose");
+var clanRateLimitUntil = 0;
+var clanRateLimitInterval = null;
 var mapDisplay = document.getElementById("mapDisplay");
 var diedText = document.getElementById("diedText");
 var skinColorHolder = document.getElementById("skinColorHolder");
@@ -402,9 +446,141 @@ var outlineColor = "#525252";
 var darkOutlineColor = "#3d3f42";
 var outlineWidth = 5.5;
 
+clanRateLimitClose.onclick = closeClanRateLimit;
+
 function setInitData(data) {
     alliances = data.teams;
 }
+
+function updateOwnerStatus(enabled) {
+    hasOwnerTools = Boolean(enabled);
+    if (!hasOwnerTools) {
+        ownerAccountIds = Object.create(null);
+    }
+    updateChatMuteUI();
+}
+
+function updateOwnerRoster(data) {
+    ownerAccountIds = Object.create(null);
+    if (!hasOwnerTools || !Array.isArray(data)) return;
+    for (var i = 0; i < data.length; i++) {
+        var entry = data[i];
+        if (Array.isArray(entry) && Number.isSafeInteger(entry[0])) {
+            ownerAccountIds[entry[0]] = {
+                accountId: Number.isSafeInteger(entry[1]) ? entry[1] : null,
+                isOwner: entry[2] === true
+            };
+        }
+    }
+}
+
+function updateShownOwners(sid, shown) {
+    if (Array.isArray(sid)) {
+        shownOwnerIds = Object.create(null);
+        for (var i = 0; i < sid.length; i++) {
+            if (Number.isSafeInteger(sid[i])) shownOwnerIds[sid[i]] = true;
+        }
+        return;
+    }
+    if (!Number.isSafeInteger(sid)) return;
+    if (shown) {
+        shownOwnerIds[sid] = true;
+    } else {
+        delete shownOwnerIds[sid];
+    }
+}
+
+function renderLeaderboardList(target, entries, start) {
+    UTILS.removeAllChildren(target);
+    var end = Math.min(start + 10, entries.length);
+    for (var i = start; i < end; i++) {
+        var entry = entries[i];
+        var name = entry[1] || "unknown";
+        var label = (i + 1) + ". " + name;
+        var row = document.createElement("div");
+        row.className = "leaderHolder";
+        row.style.color = entry[0] == playerSID ? "#fff" : "rgba(255,255,255,0.8)";
+        var item = document.createElement("span");
+        item.className = "leaderboardItem";
+        item.textContent = label;
+        row.appendChild(item);
+        var score = document.createElement("span");
+        score.className = "leaderScore";
+        score.textContent = UTILS.kFormat(entry[2]) || "0";
+        row.appendChild(score);
+        target.appendChild(row);
+    }
+    return end - start;
+}
+
+function updateLeaderboardDisplay() {
+    var frontCount = renderLeaderboardList(leaderboardData, leaderboardEntries, 0);
+    var backCount = renderLeaderboardList(leaderboardDataBack, leaderboardEntries, 10);
+    var rows = Math.max(frontCount, backCount);
+    leaderboardCard.classList.toggle("is-flipped", leaderboardSide === 1);
+    leaderboardFlip.textContent = leaderboardSide === 0 ? "11-20" : "1-10";
+    leaderboardFlip.disabled = (leaderboardSide === 0 ? backCount : frontCount) === 0;
+    leaderboardFlip.style.display = leaderboardEntries.length > 10 ? "block" : "none";
+    leaderboardScene.style.height = Math.max(0, rows * 25) + "px";
+    leaderboardCard.style.height = Math.max(0, rows * 25) + "px";
+}
+
+function updateChatRosterSize() {
+    var width = Math.min(window.innerWidth * 0.9, chatRosterColumns * 280);
+    chatRoster.style.width = width + "px";
+    chatRoster.style.fontSize = Math.max(12, Math.min(20,
+        Math.floor(width / Math.max(1, chatRosterColumns * chatRosterLongestText * 0.58)))) + "px";
+}
+
+function receivePlayersList(data) {
+    if (!hasOwnerTools || !Array.isArray(data)) return;
+    var entries = data.filter(function (entry) {
+        return Array.isArray(entry) && Number.isSafeInteger(entry[0]) &&
+            typeof entry[1] === "string";
+    }).map(function (entry) {
+        return [entry[0], entry[1], entry[2] ? String(entry[2]) : null];
+    });
+    UTILS.removeAllChildren(chatRoster);
+    chatRosterLongestText = 0;
+    chatRosterColumns = Math.max(1, Math.ceil(entries.length / 10));
+    chatRoster.style.setProperty("--roster-rows", Math.min(10, entries.length) || 1);
+    chatRoster.style.gridTemplateColumns = "repeat(" + chatRosterColumns + ", minmax(0, 1fr))";
+    for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i];
+        var row = document.createElement("div");
+        row.className = "chatRosterEntry";
+        row.textContent = "#" + entry[0] + " " + (entry[1] || "unknown") +
+            " (" + (entry[2] ? "account " + entry[2] : "no account") + ")";
+        chatRoster.appendChild(row);
+        chatRosterLongestText = Math.max(chatRosterLongestText, row.textContent.length);
+    }
+    if (!entries.length) {
+        var empty = document.createElement("div");
+        empty.className = "chatRosterEntry";
+        empty.textContent = "No players are online.";
+        chatRoster.appendChild(empty);
+        chatRosterLongestText = empty.textContent.length;
+    }
+    updateChatRosterSize();
+    chatRoster.style.display = "grid";
+    chatHolder.style.display = "block";
+    chatBox.value = "";
+    updateChatMuteUI();
+}
+
+function flipLeaderboard() {
+    leaderboardSide = leaderboardSide === 0 ? 1 : 0;
+    updateLeaderboardDisplay();
+}
+leaderboardFlip.addEventListener("click", flipLeaderboard);
+leaderboardTitle.addEventListener("click", flipLeaderboard);
+leaderboardButton.addEventListener("click", function () {
+    leaderboard.classList.toggle("is-showing");
+});
+window.addEventListener("resize", function () {
+    updateLeaderboardDisplay();
+    if (chatRoster.style.display === "grid") updateChatRosterSize();
+});
 
 var featuredYoutuber = document.getElementById('featuredYoutube');
 var youtuberList = [{
@@ -1016,6 +1192,37 @@ function deleteAlliance(sid) {
     }
     if (allianceMenu.style.display == "block") {
         showAllianceMenu();
+    }
+}
+
+function showClanRateLimit(duration) {
+    duration = Number(duration);
+    if (!Number.isFinite(duration) || duration <= 0) return;
+
+    clanRateLimitUntil = Date.now() + duration;
+    clanRateLimit.style.display = "block";
+    if (clanRateLimitInterval) clearInterval(clanRateLimitInterval);
+
+    function updateTimer() {
+        var secondsLeft = Math.max(0, Math.ceil((clanRateLimitUntil - Date.now()) / 1000));
+        if (!secondsLeft) {
+            closeClanRateLimit();
+            return;
+        }
+        var minutes = Math.floor(secondsLeft / 60);
+        var seconds = secondsLeft % 60;
+        clanRateLimitTimerText.textContent = minutes + ":" + ("0" + seconds).slice(-2);
+    }
+
+    updateTimer();
+    clanRateLimitInterval = setInterval(updateTimer, 1000);
+}
+
+function closeClanRateLimit() {
+    clanRateLimit.style.display = "none";
+    if (clanRateLimitInterval) {
+        clearInterval(clanRateLimitInterval);
+        clanRateLimitInterval = null;
     }
 }
 
@@ -1676,11 +1883,12 @@ function selectSkinColor(index) {
 
 var chatBox = document.getElementById("chatBox");
 var chatHolder = document.getElementById("chatHolder");
-var chatMuteStatus = document.getElementById("chatMuteStatus");
 var chatMuteUntil = 0;
 var chatCooldownUntil = 0;
 var chatUiTimer = null;
-var CHAT_COOLDOWN_MS = config.chatCooldown || 2000;
+var chatMeasureContext = document.createElement("canvas").getContext("2d");
+var CHAT_COOLDOWN_ENABLED = config.chatCooldownEnabled !== false;
+var CHAT_COOLDOWN_MS = config.chatCooldown || 1300;
 var CHAT_MUTE_STORAGE_KEY = "chat_mute_until";
 var chatFilter = new Filter();
 var chatFilterEnabled = getSavedVal("chat_filter_enabled") !== "false";
@@ -1736,19 +1944,31 @@ function formatMuteDuration(ms) {
 
 function formatCooldownText(ms) {
     var totalMs = Number(ms) || 0;
-    var seconds = Math.max(0, Math.ceil(totalMs / 1000));
-    return seconds + "s";
+    var seconds = Math.max(0, Math.ceil(totalMs / 100) / 10);
+    return seconds.toFixed(1) + "s";
 }
 
 function fitMuteInputSize(text) {
     if (!chatBox) return;
     var value = String(text || "");
+    var maxWidth = Math.max(80, window.innerWidth * 0.9);
     var size = 20;
-    if (value.length > 22) size = 18;
-    if (value.length > 28) size = 16;
-    if (value.length > 34) size = 14;
-    if (value.length > 40) size = 12;
-    var width = Math.min(Math.max(value.length * (size * 0.48) + 12, 140), window.innerWidth * 0.9);
+    var style = window.getComputedStyle(chatBox);
+    var padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    var border = parseFloat(style.borderLeftWidth) + parseFloat(style.borderRightWidth);
+
+    chatBox.style.fontSize = size + "px";
+    chatMeasureContext.font = window.getComputedStyle(chatBox).font;
+    var textWidth = chatMeasureContext.measureText(value).width;
+    var availableWidth = maxWidth - padding - border;
+    if (textWidth > availableWidth) {
+        size = Math.max(10, size * availableWidth / textWidth);
+        chatBox.style.fontSize = size + "px";
+        chatMeasureContext.font = window.getComputedStyle(chatBox).font;
+        textWidth = chatMeasureContext.measureText(value).width;
+    }
+
+    var width = Math.min(maxWidth, Math.max(Math.min(140, maxWidth), Math.ceil(textWidth + padding + border)));
     chatBox.style.fontSize = size + "px";
     chatBox.style.width = Math.round(width) + "px";
     chatBox.style.boxSizing = "border-box";
@@ -1759,7 +1979,7 @@ function updateChatMuteUI() {
     var now = Date.now();
     var muted = chatMuteUntil > now;
     var cooldownLeft = Math.max(0, chatCooldownUntil - now);
-    var onCooldown = cooldownLeft > 0 && !muted;
+    var onCooldown = CHAT_COOLDOWN_ENABLED && cooldownLeft > 0 && !muted;
 
     if (!muted && chatMuteUntil > 0 && chatMuteUntil <= now) {
         chatMuteUntil = 0;
@@ -1770,19 +1990,15 @@ function updateChatMuteUI() {
     chatBox.style.opacity = (muted || onCooldown) ? "0.5" : "1";
     chatBox.style.cursor = (muted || onCooldown) ? "not-allowed" : "text";
 
-    if (chatMuteStatus) {
-        chatMuteStatus.style.display = "none";
-    }
-
     if (muted) {
         var muteText = "You're muted for " + formatMuteDuration(Math.max(0, chatMuteUntil - now));
         chatBox.value = muteText;
         chatBox.placeholder = "";
-        fitMuteInputSize(muteText);
         chatBox.style.color = "rgba(255,255,255,0.7)";
         chatBox.style.textAlign = "left";
         chatBox.style.paddingLeft = "12px";
         chatBox.style.paddingRight = "12px";
+        fitMuteInputSize(muteText);
     } else if (onCooldown) {
         chatBox.value = "";
         chatBox.placeholder = "Chat cooldown: " + formatCooldownText(cooldownLeft);
@@ -1824,6 +2040,10 @@ function receiveMuteState(data) {
     updateChatMuteUI();
 }
 
+function receivePrivateMessage(message) {
+    receiveChat(playerSID, message);
+}
+
 function setChatFilterEnabled(enabled) {
     chatFilterEnabled = Boolean(enabled);
     saveVal("chat_filter_enabled", String(chatFilterEnabled));
@@ -1832,6 +2052,14 @@ function setChatFilterEnabled(enabled) {
 }
 
 function toggleChat() {
+    if (chatHolder.style.display == "block") {
+        if (chatMuteUntil <= Date.now() && (!CHAT_COOLDOWN_ENABLED || chatCooldownUntil <= Date.now()) && !chatBox.disabled && chatBox.value) {
+            sendChat(chatBox.value);
+        }
+        closeChat();
+        return;
+    }
+
     if (chatMuteUntil > Date.now()) {
         storeMenu.style.display = "none";
         allianceMenu.style.display = "none";
@@ -1841,18 +2069,11 @@ function toggleChat() {
         return;
     }
     if (!usingTouch) {
-        if (chatHolder.style.display == "block") {
-            if (chatBox.value) {
-                sendChat(chatBox.value);
-            }
-            closeChat();
-        } else {
-            storeMenu.style.display = "none";
-            allianceMenu.style.display = "none";
-            chatHolder.style.display = "block";
-            chatBox.focus();
-            resetMoveDir();
-        }
+        storeMenu.style.display = "none";
+        allianceMenu.style.display = "none";
+        chatHolder.style.display = "block";
+        chatBox.focus();
+        resetMoveDir();
     } else {
         setTimeout(function () {
             var chatMessage = prompt("chat message");
@@ -1869,11 +2090,11 @@ function sendChat(message) {
         updateChatMuteUI();
         return;
     }
-    if (chatCooldownUntil > Date.now()) {
+    if (CHAT_COOLDOWN_ENABLED && chatCooldownUntil > Date.now()) {
         updateChatMuteUI();
         return;
     }
-    chatCooldownUntil = Date.now() + CHAT_COOLDOWN_MS;
+    chatCooldownUntil = CHAT_COOLDOWN_ENABLED ? Date.now() + CHAT_COOLDOWN_MS : 0;
     updateChatMuteUI();
     io.send("6", message.slice(0, 30));
 }
@@ -1881,6 +2102,7 @@ function sendChat(message) {
 function closeChat() {
     chatBox.value = "";
     chatHolder.style.display = "none";
+    chatRoster.style.display = "none";
 }
 
 function checkProfanityString(text) {
@@ -2099,6 +2321,15 @@ function keysActive() {
 
 function keyDown(event) {
     var keyNum = event.which || event.keyCode || 0;
+    if (hasOwnerTools && event.key === "/" && chatHolder.style.display != "block" && player && player.alive) {
+        event.preventDefault();
+        toggleChat();
+        if (chatHolder.style.display == "block" && !chatBox.disabled) {
+            chatBox.value = "/";
+            chatBox.focus();
+        }
+        return;
+    }
     if (keyNum == 32 && (storeMenu.style.display == "block" || allianceMenu.style.display == "block")) {
         event.preventDefault();
     }
@@ -2284,12 +2515,8 @@ function selectToBuild(index, wpn) {
 
 function enterGame() {
     saveVal("moo_name", nameInput.value);
-    if (!inGame && socketReady()) {
-        var tmpName = nameInput.value || "";
-        if (tmpName.trim() === "") {
-            showNameRejected("Your username has been flagged as inappropriate. Please choose a different username to continue playing");
-            return;
-        }
+    if (!inGame && socketReady() && connected) {
+        var tmpName = nameInput.value.trim() ? nameInput.value : "unknown";
         if (nameFilter.isBadName(tmpName)) {
             showNameRejected("Your username has been flagged as inappropriate. Please choose a different username to continue playing");
             return;
@@ -2303,6 +2530,168 @@ function enterGame() {
             skin: skinColor
         });
     }
+}
+
+var accountUiBound = false;
+
+function showAccountNotice(message, isError) {
+    var notice = document.getElementById("accountNotice");
+    if (!notice) return;
+    notice.textContent = message || "";
+    notice.style.display = message ? "block" : "none";
+    notice.style.color = isError ? "#b33" : "#38812a";
+}
+
+function accountErrorText(error) {
+    var messages = {
+        invalid_username: "That player name is unavailable or filtered.",
+        username_taken: "That player name is already in use.",
+        username_cooldown: "You can only change your player name once every 24 hours.",
+        login_required: "Sign in again to change account settings.",
+        account_unavailable: "This account is currently unavailable."
+    };
+    return messages[error] || "The account request failed. Please try again.";
+}
+
+function formatAccountTime(seconds) {
+    var minutes = Math.floor((Number(seconds) || 0) / 60);
+    var hours = Math.floor(minutes / 60);
+    minutes %= 60;
+    return hours ? hours + "h" + (minutes ? " " + minutes + "m" : "") : minutes + "m";
+}
+
+function setAccountStat(id, value) {
+    document.getElementById(id).textContent = value;
+}
+
+async function loadAccountUi() {
+    var accountCard = document.getElementById("accountCard");
+    var signIn = document.getElementById("accountSignIn");
+    var create = document.getElementById("accountCreate");
+    var profileHolder = document.getElementById("accountProfile");
+    var description = document.getElementById("accountDescription");
+    var guestMessage = document.getElementById("accountGuestMessage");
+    var error = new URLSearchParams(window.location.search).get("accountError");
+
+    if (error) {
+        showAccountNotice(error === "discord_not_configured" ?
+            "Discord sign-in is not configured on this server yet." :
+            "Discord sign-in did not complete. Please try again.", true);
+        var cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete("accountError");
+        window.history.replaceState({}, "", cleanUrl);
+    }
+
+    try {
+        var response = await fetch("/api/me", { credentials: "same-origin", cache: "no-store" });
+        if (!response.ok) throw new Error("Could not load your account.");
+        var data = await response.json();
+        if (!data.loggedIn || !data.profile) {
+            accountCard.classList.remove("accountSignedIn");
+            signIn.style.display = "flex";
+            create.style.display = "flex";
+            profileHolder.style.display = "none";
+            nameInput.readOnly = false;
+            return;
+        }
+
+        var profile = data.profile;
+        var stats = profile.stats || {};
+        signIn.style.display = "none";
+        create.style.display = "none";
+        accountCard.classList.add("accountSignedIn");
+        profileHolder.style.display = "block";
+        document.getElementById("accountName").textContent = profile.username;
+        document.getElementById("accountUsernameInput").value = profile.username;
+        var kills = Number(stats.kills) || 0;
+        var deaths = Number(stats.deaths) || 0;
+        var formatNumber = function (value) {
+            return Math.floor(Number(value) || 0).toLocaleString();
+        };
+        setAccountStat("accountStatKills", formatNumber(kills));
+        setAccountStat("accountStatDeaths", formatNumber(deaths));
+        setAccountStat("accountStatKd", (deaths ? kills / deaths : kills).toFixed(2));
+        setAccountStat("accountStatDamage", formatNumber(stats.damage));
+        setAccountStat("accountStatHealing", formatNumber(stats.healing));
+        setAccountStat("accountStatWood", formatNumber(stats.wood));
+        setAccountStat("accountStatFood", formatNumber(stats.food));
+        setAccountStat("accountStatStone", formatNumber(stats.stone));
+        setAccountStat("accountStatGold", UTILS.kFormat(Number(stats.gold) || 0));
+        setAccountStat("accountStatAnimals", formatNumber(stats.animal_kills));
+        setAccountStat("accountStatBosses", formatNumber(stats.boss_kills));
+        setAccountStat("accountStatAnimalDamage", formatNumber(stats.animal_damage));
+        setAccountStat("accountStatBestScore", UTILS.kFormat(Number(stats.best_score) || 0));
+        setAccountStat("accountStatBestKills", formatNumber(stats.best_kills));
+        setAccountStat("accountStatLives", formatNumber(stats.lives));
+        setAccountStat("accountStatPlayed", formatAccountTime(stats.play_seconds));
+        nameInput.value = profile.username;
+        nameInput.readOnly = true;
+        description.textContent = "Your account saves your player name and game stats.";
+        guestMessage.textContent = "Your account is connected.";
+    } catch (error) {
+        showAccountNotice(error.message || "Could not load your account.", true);
+    }
+}
+
+async function saveAccountName() {
+    var username = document.getElementById("accountUsernameInput").value;
+    try {
+        var response = await fetch("/api/account/username", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: username })
+        });
+        var data = await response.json();
+        if (!response.ok) {
+            showAccountNotice(accountErrorText(data.error), true);
+            return;
+        }
+        showAccountNotice("Player name saved. Reloading your game...", false);
+        setTimeout(function () { window.location.reload(); }, 500);
+    } catch (error) {
+        showAccountNotice("Could not save your player name. Please try again.", true);
+    }
+}
+
+async function signOutAccount() {
+    try {
+        var response = await fetch("/api/auth/logout", {
+            method: "POST",
+            credentials: "same-origin"
+        });
+        if (!response.ok) throw new Error("Sign out failed.");
+        window.location.reload();
+    } catch (error) {
+        showAccountNotice(error.message, true);
+    }
+}
+
+async function deleteAccount() {
+    if (!window.confirm("Delete your account and saved stats? This cannot be undone.")) return;
+    try {
+        var response = await fetch("/api/account", {
+            method: "DELETE",
+            credentials: "same-origin"
+        });
+        var data = await response.json();
+        if (!response.ok) {
+            showAccountNotice(accountErrorText(data.error), true);
+            return;
+        }
+        window.location.reload();
+    } catch (error) {
+        showAccountNotice("Could not delete the account. Please try again.", true);
+    }
+}
+
+function setupAccountUi() {
+    if (accountUiBound) return;
+    accountUiBound = true;
+    document.getElementById("accountSaveName").addEventListener("click", saveAccountName);
+    document.getElementById("accountLogout").addEventListener("click", signOutAccount);
+    document.getElementById("accountDelete").addEventListener("click", deleteAccount);
+    loadAccountUi();
 }
 
 var firstSetup = true;
@@ -2323,6 +2712,52 @@ function setupGame(yourSID) {
 
 function showText(x, y, value, type) {
     textManager.showText(x, y, 50, 0.18, 500, Math.abs(value), (value >= 0) ? "#fff" : "#8ecc51");
+}
+
+var globalAnnouncementTimer;
+var globalAnnouncementInterval;
+
+function showGlobalAnnouncement(message) {
+    var banner = document.getElementById("globalAnnouncement");
+    var sender = document.getElementById("globalAnnouncementSender");
+    var senderName = document.getElementById("globalAnnouncementSenderName");
+    var senderRole = document.getElementById("globalAnnouncementSenderRole");
+    var text = document.getElementById("globalAnnouncementText");
+    if (!banner || !sender || !senderName || !senderRole || !text) return;
+
+    var announcement = typeof message === "string" ?
+        { message: message, sender: "" } : message;
+    if (!announcement || typeof announcement.message !== "string") return;
+    var startedAt = Number(announcement.sentAt) || Date.now();
+    var elapsed = Math.max(0, Date.now() - startedAt);
+    var expiresAt = Number(announcement.expiresAt) ||
+        startedAt + announcement.message.length * 30 + 12000;
+    var remaining = expiresAt - Date.now();
+    if (remaining <= 0) return;
+
+    clearTimeout(globalAnnouncementTimer);
+    clearInterval(globalAnnouncementInterval);
+    banner.classList.remove("globalAnnouncementFade");
+    banner.style.display = "block";
+    senderName.textContent = announcement.sender || "";
+    senderRole.textContent = announcement.role ? "(" + announcement.role + ")" : "";
+    sender.style.display = announcement.sender ? "block" : "none";
+
+    var index = Math.min(announcement.message.length, Math.floor(elapsed / 30));
+    text.textContent = announcement.message.slice(0, index);
+    globalAnnouncementInterval = setInterval(function () {
+        text.textContent = announcement.message.slice(0, ++index);
+        if (index >= announcement.message.length) {
+            clearInterval(globalAnnouncementInterval);
+            globalAnnouncementTimer = setTimeout(function () {
+                banner.classList.add("globalAnnouncementFade");
+                globalAnnouncementTimer = setTimeout(function () {
+                    banner.style.display = "none";
+                    banner.classList.remove("globalAnnouncementFade");
+                }, 400);
+            }, Math.max(0, expiresAt - Date.now()));
+        }
+    }, 30);
 }
 
 var deathTextScale = 99999;
@@ -2472,28 +2907,11 @@ function updateAge(xp, mxp, age) {
 }
 
 function updateLeaderboard(data) {
-    UTILS.removeAllChildren(leaderboardData);
-    var tmpC = 1;
+    leaderboardEntries = [];
     for (var i = 0; i < data.length; i += 3) {
-        (function (i) {
-            UTILS.generateElement({
-                class: "leaderHolder",
-                parent: leaderboardData,
-                children: [
-                    UTILS.generateElement({
-                        class: "leaderboardItem",
-                        style: "color:" + ((data[i] == playerSID) ? "#fff" : "rgba(255,255,255,0.6)"),
-                        text: tmpC + ". " + (data[i + 1] != "" ? data[i + 1] : "unknown")
-                    }),
-                    UTILS.generateElement({
-                        class: "leaderScore",
-                        text: UTILS.kFormat(data[i + 2]) || "0"
-                    })
-                ]
-            });
-        })(i);
-        tmpC++;
+        leaderboardEntries.push([data[i], data[i + 1], data[i + 2]]);
     }
+    updateLeaderboardDisplay();
 }
 
 function prepareObjectRenderLists(xOffset, yOffset, delta) {
@@ -2705,24 +3123,41 @@ function updateGame() {
 
                 if (tmpObj.skinIndex != 10 || (tmpObj == player) || (tmpObj.team && tmpObj.team == player.team)) {
                     var tmpText = (tmpObj.team ? "[" + tmpObj.team + "] " : "") + (tmpObj.name || "");
+                    var ownerInfo = tmpObj.isPlayer ? ownerAccountIds[tmpObj.sid] : null;
+                    var isOwnerShown = tmpObj.isPlayer && shownOwnerIds[tmpObj.sid] === true;
+                    var isOwner = isOwnerShown || Boolean(ownerInfo && ownerInfo.isOwner);
                     if (tmpText != "") {
                         mainContext.font = (tmpObj.nameScale || 30) + "px Hammersmith One";
-                        mainContext.fillStyle = "#fff";
+                        var tmpTextWidth = mainContext.measureText(tmpText).width;
+                        mainContext.fillStyle = isOwner ? "#ff9f35" : "#fff";
                         mainContext.textBaseline = "middle";
                         mainContext.textAlign = "center";
                         mainContext.lineWidth = (tmpObj.nameScale ? 11 : 8);
                         mainContext.lineJoin = "round";
                         mainContext.strokeText(tmpText, tmpObj.x - xOffset, (tmpObj.y - yOffset - tmpObj.scale) - config.nameY);
                         mainContext.fillText(tmpText, tmpObj.x - xOffset, (tmpObj.y - yOffset - tmpObj.scale) - config.nameY);
+                        if ((ownerInfo && ownerInfo.accountId) || isOwnerShown) {
+                            var accountText = ownerInfo && ownerInfo.isOwner
+                                ? "OWNER"
+                                : ownerInfo && ownerInfo.accountId
+                                    ? "#" + ownerInfo.accountId
+                                    : "OWNER";
+                            var accountY = (tmpObj.y - yOffset - tmpObj.scale) - config.nameY + 25;
+                            mainContext.font = "15px Hammersmith One";
+                            mainContext.lineWidth = 4;
+                            mainContext.strokeText(accountText, tmpObj.x - xOffset, accountY);
+                            mainContext.fillStyle = isOwner ? "#ff9f35" : "#fff";
+                            mainContext.fillText(accountText, tmpObj.x - xOffset, accountY);
+                        }
                         if (tmpObj.isLeader && iconSprites["crown"].isLoaded) {
                             var tmpS = config.crownIconScale;
-                            var tmpX = tmpObj.x - xOffset - (tmpS / 2) - (mainContext.measureText(tmpText).width / 2) - config.crownPad;
+                            var tmpX = tmpObj.x - xOffset - (tmpS / 2) - (tmpTextWidth / 2) - config.crownPad;
                             mainContext.drawImage(iconSprites["crown"], tmpX, (tmpObj.y - yOffset - tmpObj.scale) -
                                 config.nameY - (tmpS / 2) - 5, tmpS, tmpS);
                         }
                         if (tmpObj.iconIndex == 1 && iconSprites["skull"].isLoaded) {
                             var tmpS = config.crownIconScale;
-                            var tmpX = tmpObj.x - xOffset - (tmpS / 2) + (mainContext.measureText(tmpText).width / 2) + config.crownPad;
+                            var tmpX = tmpObj.x - xOffset - (tmpS / 2) + (tmpTextWidth / 2) + config.crownPad;
                             mainContext.drawImage(iconSprites["skull"], tmpX, (tmpObj.y - yOffset - tmpObj.scale) - config.nameY - (tmpS / 2) - 5, tmpS, tmpS);
                         }
                     }
@@ -3764,6 +4199,7 @@ function doUpdate() {
 
 function startGame() {
     bindEvents();
+    setupAccountUi();
     loadIcons();
     loadingText.style.display = "none";
     menuCardHolder.style.display = "flex";

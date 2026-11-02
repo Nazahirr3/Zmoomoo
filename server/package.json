@@ -7,6 +7,9 @@
     "start": "node src/index.js",
     "dev": "NODE_ENV=development node src/index.js"
   },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",

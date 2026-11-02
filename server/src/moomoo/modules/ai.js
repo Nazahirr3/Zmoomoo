@@ -333,6 +333,10 @@ export class AI {
         // CHANGE HEALTH:
         this.changeHealth = function(val, doer, runFrom) {
             if (this.active) {
+                var oldHealth = this.health;
+                if (val < 0 && doer && doer.isPlayer && doer.accountMatchStats && this.index <= 5) {
+                    doer.accountMatchStats.animalDamage += Math.min(-val, Math.max(0, oldHealth));
+                }
                 this.health += val;
                 if (runFrom) {
                     if (this.hitScare && !UTILS.randInt(0, this.hitScare)) {
@@ -371,6 +375,10 @@ export class AI {
                     this.health = this.maxHealth;
                     this.runFrom = null;
                     if (doer) {
+                        if (doer.isPlayer && doer.accountMatchStats) {
+                            if (this.index >= 6) doer.accountMatchStats.boss_kills++;
+                            else doer.accountMatchStats.animal_kills++;
+                        }
                         scoreCallback(doer, this.killScore);
                         if (this.killScore && typeof doer.earnXP === "function") {
                             doer.earnXP(this.killScore * 2);

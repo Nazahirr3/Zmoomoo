@@ -142,17 +142,25 @@ var groupedConfig = {
 
     chat: {
         chatCountdown: 3000,  // ms
-        chatCooldown: 2000,    // ms
+        chatCooldown: 1300,    // ms
+        chatCooldownEnabled: true,
         chatFilterEnabled: true,
         chatFilterAntiBypass: true,
         chatMuteStart: 5 * 60 * 1000,
-        chatMuteCap: 9007199254740991,
+        chatMuteCap: 24 * 60 * 60 * 1000,
         chatMuteResetDays: 3,
-        chatBadWords: [
-            "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
-            "hoe", "slut", "pussy", "dick", "faggot", "whore", "bitch", "cunt"
+        chatSevereWords: [
+            "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga", "faggot"
         ],
+        chatMildWords: ["hoe", "slut", "pussy", "dick", "whore", "bitch", "cunt"],
         chatSafeWords: ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria"],
+        chatCrossMessageCount: 3,
+        chatCrossMessageWindow: 3000,
+        chatBurstCount: 5,
+        chatBurstWindow: 10000,
+        chatDuplicateWindow: 10000,
+        chatShadowMuteCount: 3,
+        chatShadowMuteWindow: 10 * 60 * 1000,
         nameBadWords: [
             "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
             "adolf", "hitler", "hilter", "adolfhitler", "hitleradolf", "hilteradolf",
@@ -333,7 +341,7 @@ var groupedConfig = {
     },
 
     leaderboard: {
-        leaderboardMaxPlayers: 10,
+        leaderboardMaxPlayers: 20,
         allianceNameMaxLength: 7
     },
 

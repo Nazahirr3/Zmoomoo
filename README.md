@@ -23,6 +23,30 @@ Fully working MooMoo.io private server
 
 Use `npm run build:dev` while iterating on the client for an auto-rebuilt bundle, or `npm run dev` to run the server in development mode.
 
+## Accounts
+
+The server requires Node.js 22.13 or newer for its built-in SQLite storage. Copy `.env.example` to `.env`, create a Discord application, and add this callback URL in its OAuth settings:
+
+```text
+http://localhost:3000/api/auth/discord/callback
+```
+
+Set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_REDIRECT_URI` in `.env`. Generate a private signing key for `JOIN_SECRET` with:
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Keep `.env` private. On production, use HTTPS and set `DISCORD_REDIRECT_URI` to the matching HTTPS callback. Set `TRUST_PROXY=true` only when the server is behind a trusted reverse proxy.
+
+The first successful Discord sign-in creates an account. Guests can still play without signing in. Accounts track kills, deaths, K/D, damage, healing, gathered resources, animal and boss kills, best score and kills, lives, and play time. Stats are saved when a player dies or disconnects. Account data is stored in `server/data/accounts.sqlite` by default; `ACCOUNT_DB_PATH` can change its location. Back up this database. The account panel includes the stored-data details and account deletion.
+
+The optional Discord bot uses the same Discord application but a separate bot token. Create or reset the token on the application's Bot page, add it as `DISCORD_BOT_TOKEN` in `.env`, and restart the server. It registers `/ping`, `/send`, `/sendglobalmessage`, `/restart`, and `/update`. `/send` is restricted to members with Manage Server permission; choose a message and a text channel in the same server. The bot also needs permission to send messages in the chosen channel. `/sendglobalmessage` is restricted to the Discord application owner and broadcasts a message to every connected player on this game server process. The banner shows the sender's server nickname, orange name, and owner role; players who join while it is active see the remaining announcement. Set `allservers` to true. `/restart` is owner-only and lets you choose this server or all servers; currently this bot manages one game-server process, so `allservers` restarts that process. Multi-process or multi-host deployments need shared orchestration to restart other instances. `/update` is owner-only: it fetches and fast-forwards the current Git upstream, installs dependencies if a package manifest changed, builds the client assets, and restarts the server after a 20-second countdown. Push commits to the branch tracked by the server first. The server checkout must have no uncommitted changes; `/update` will stop rather than overwrite local edits. Shared pub/sub is also required to relay announcements between game-server processes. Set `DISCORD_GUILD_ID` to your server ID to register commands there immediately. Leave it blank to register globally, which can take time to appear. The server must also be in that Discord server to check member roles. A signed-in game account's owner-role status is refreshed when it joins, and `/owner` performs a fresh check; using `/owner` without the role disconnects that player. Role verification uses the bot token and `DISCORD_OWNER_ROLE_ID`, not the role name. Owner status is stored server-side for that game session; it does not change the separate clan-leader behavior. The server process must stay running for the bot to remain online. Never share or commit the bot token.
+
+## Discord owner role
+
+Set `DISCORD_GUILD_ID`, `DISCORD_OWNER_ROLE_ID`, and `DISCORD_BOT_TOKEN` in `.env`. Signed-in players are checked against the role when they join. `/owner` runs a fresh check and disconnects the player if they do not have the role. On success, the name turns orange and account IDs appear beneath player names; only verified owners receive those IDs. `/players` privately displays the online roster in chat, splitting it into columns of up to 10 players. Each row shows the temporary in-game player ID and name, plus the account ID or `no account` for guests. Guest IDs only identify the current game session. The regular leaderboard keeps its original style and flips between ranks 1-10 and 11-20. `/mute <player id> <minutes>` and `/unmute <player id>` change chat mutes; the confirmation is private to the owner, while the muted player sees their own mute timer. These commands recheck the Discord role each time. This role flag is separate from clan ownership.
+
 ## Disclaimer
 
 This is a **non-commercial, educational** fan project and clone of MooMoo.io. This project is intended solely for learning purposes and personal use.

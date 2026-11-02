@@ -1,133 +1,194 @@
 import { config } from "../config.js";
+import normalizer from "../../../../shared/normalize-text.js";
 
 var DAY_MS = 24 * 60 * 60 * 1000;
-var ZERO_WIDTH_REGEX = /[\u200B-\u200D\u2060\uFEFF]/;
-var CONFUSABLES = {
-    a: "a", e: "e", i: "i", o: "o", s: "s", t: "t",
-    A: "a", E: "e", I: "i", O: "o", S: "s", T: "t",
-    "а": "a", "е": "e", "і": "i", "ο": "o", "ѕ": "s",
-    "Α": "a", "Ε": "e", "Ι": "i", "Ο": "o", "Σ": "s",
-    "α": "a", "ε": "e", "ι": "i", "σ": "s", "ς": "s", "τ": "t",
-    "ａ": "a", "ｅ": "e", "ｉ": "i", "ｏ": "o", "ｓ": "s",
-    "ｔ": "t"
-};
-var LEET_MAP = {
-    "0": "o",
-    "1": "i",
-    "2": "z",
-    "3": "e",
-    "4": "a",
-    "5": "s",
-    "6": "g",
-    "7": "t",
-    "8": "b",
-    "9": "g",
-    "@": "a",
-    "$": "s",
-    "!": "i",
-    "|": "i",
-    "+": "t",
-    "(": "c",
-    ")": "c",
-    "[": "c",
-    "]": "c",
-    "{": "c",
-    "}": "c"
-};
-
-var BAD_WORDS = (config.chatBadWords || [
-    "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga",
-    "hoe", "slut", "pussy", "dick", "faggot", "whore", "bitch", "cunt"
+var normalizeVariants = normalizer.normalizeVariants;
+var SEVERE_WORDS = buildWordList((config.chatSevereWords || [
+    "nigger", "nigga", "nig", "niga", "ngga", "ngger", "nggr", "ngr", "nga", "faggot"
+]).concat(config.nameBadWords || []));
+var MILD_WORDS = buildWordList(config.chatMildWords || [
+    "hoe", "slut", "pussy", "dick", "whore", "bitch", "cunt"
+]);
+var SAFE_WORDS = (config.chatSafeWords || [
+    "class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria"
 ]).map(function(word) {
-    return String(word).toLowerCase();
+    return normalizeVariants(word);
 });
 
-var SAFE_WORDS = (config.chatSafeWords || ["class", "assassin", "grape", "cocktail", "manga", "angry", "nigeria"]).map(function(word) {
-    return normalizeInput(word);
-});
-
-var NORMALIZED_BAD_WORDS = BAD_WORDS.map(normalizeInput).filter(Boolean);
-
-function normalizeInput(value) {
-    if (value === null || value === undefined) return "";
-
-    var text = String(value).toLowerCase();
-    var out = "";
-    var last = "";
-
-    for (var i = 0; i < text.length; i++) {
-        var ch = text.charAt(i);
-        var mapped = CONFUSABLES[ch] || LEET_MAP[ch] || ch;
-
-        if (mapped === "" || ZERO_WIDTH_REGEX.test(mapped)) {
-            continue;
-        }
-
-        if (mapped >= "0" && mapped <= "9") {
-            mapped = LEET_MAP[mapped] || "";
-        }
-
-        if (mapped < "a" || mapped > "z") {
-            continue;
-        }
-
-        if (mapped === last) {
-            continue;
-        }
-
-        out += mapped;
-        last = mapped;
-    }
-
-    return out;
+function buildWordList(words) {
+    return words.map(function(word) {
+        return normalizeVariants(word);
+    }).filter(function(word) {
+        return word.compactOne;
+    });
 }
 
 export function normalizeMessage(message) {
-    return normalizeInput(message);
+    return normalizeVariants(message).compactOne;
 }
 
 export function filter_chat(chat, options) {
     if (!chat || typeof chat !== "string") return "";
 
+    var match = classifyChat(chat, options);
+    if (!match) return chat.trim();
+    if (match.severity === "severe") return "";
+    return maskMildWords(chat, options);
+}
+
+export function classifyChat(raw, options) {
+    if (!raw || typeof raw !== "string") return null;
+
     var enabled = options && typeof options.enabled === "boolean" ? options.enabled : config.chatFilterEnabled !== false;
+    if (!enabled) return null;
+
     var antiBypass = options && typeof options.antiBypass === "boolean" ? options.antiBypass : config.chatFilterAntiBypass !== false;
+    var variants = antiBypass ?
+        normalizeVariants(raw) :
+        normalizeVariants(raw.toLowerCase().replace(/[^a-z\s]/g, ""));
+    var tokens = variants.two.split(/\s+/).filter(Boolean);
 
-    if (!enabled) {
-        return chat.trim();
-    }
-
-    return isBadChat(chat, { enabled: enabled, antiBypass: antiBypass }) ? "" : chat.trim();
+    if (matchesSevere(variants, tokens)) return { severity: "severe" };
+    if (matchesMild(tokens)) return { severity: "mild" };
+    return null;
 }
 
 export function isBadChat(raw, options) {
-    if (!raw || typeof raw !== "string") return false;
+    return Boolean(classifyChat(raw, options));
+}
 
+export function isSevereChat(raw, options) {
+    var match = classifyChat(raw, options);
+    return Boolean(match && match.severity === "severe");
+}
+
+export function isSevereAcrossMessages(messages, options) {
     var enabled = options && typeof options.enabled === "boolean" ? options.enabled : config.chatFilterEnabled !== false;
     if (!enabled) return false;
 
-    var antiBypass = options && typeof options.antiBypass === "boolean" ? options.antiBypass : config.chatFilterAntiBypass !== false;
-    var checked = antiBypass ? normalizeInput(raw) : raw.toLowerCase().replace(/[^a-z]/g, "");
+    var text = messages.join("");
+    var variants = normalizeVariants(text);
+    return matchesSevere(variants, variants.two.split(/\s+/).filter(Boolean), true);
+}
 
-    if (!checked) return false;
+export function isChatAdvertisement(raw) {
+    return /(?:https?:\/\/|www\.|discord\.gg\/|discord(?:app)?\.com\/invite\/|(?:^|\s)join\s+(?:my|our)\s+(?:server|discord|game)\b)/i.test(raw);
+}
 
-    for (var i = 0; i < SAFE_WORDS.length; i++) {
-        if (!SAFE_WORDS[i]) continue;
-        if (checked === SAFE_WORDS[i]) return false;
-    }
+export function getChatViolation(raw, options) {
+    var match = classifyChat(raw, options);
+    if (match) return match;
+    return isChatAdvertisement(raw) ? { severity: "blocked" } : null;
+}
 
-    for (var j = 0; j < NORMALIZED_BAD_WORDS.length; j++) {
-        var badWord = NORMALIZED_BAD_WORDS[j];
-        if (!badWord) continue;
+function matchesSevere(variants, tokens, allowCompact) {
+    var compactOne = allowCompact ? removeSafeWords(variants.compactOne) : "";
+    var compactTwo = allowCompact ? removeSafeWords(variants.compactTwo) : "";
 
-        if (badWord.length <= 4) {
-            if (checked === badWord) return true;
-            continue;
+    for (var i = 0; i < SEVERE_WORDS.length; i++) {
+        var term = SEVERE_WORDS[i];
+        if (allowCompact && term.compactOne.length > 4 &&
+            (compactOne.indexOf(term.compactOne) !== -1 ||
+                compactTwo.indexOf(term.compactTwo) !== -1)) return true;
+
+        for (var j = 0; j < tokens.length; j++) {
+            if (!isSafeWord(tokens[j]) &&
+                matchesWord(tokens[j], term, false)) return true;
         }
 
-        if (checked.indexOf(badWord) !== -1) return true;
+        if (matchesSeparatedLetters(tokens, term)) return true;
     }
 
     return false;
+}
+
+function removeSafeWords(text) {
+    for (var i = 0; i < SAFE_WORDS.length; i++) {
+        var safe = SAFE_WORDS[i];
+        var words = [safe.compactOne, safe.compactTwo];
+        for (var j = 0; j < words.length; j++) {
+            if (!words[j]) continue;
+            var escaped = words[j].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            text = text.replace(new RegExp(escaped, "g"), " ");
+        }
+    }
+    return text;
+}
+
+function matchesMild(tokens) {
+    for (var i = 0; i < tokens.length; i++) {
+        if (isSafeWord(tokens[i])) continue;
+
+        for (var j = 0; j < MILD_WORDS.length; j++) {
+            if (matchesWord(tokens[i], MILD_WORDS[j], false)) return true;
+        }
+    }
+
+    return false;
+}
+
+function isSafeWord(token) {
+    for (var i = 0; i < SAFE_WORDS.length; i++) {
+        if (matchesWord(token, SAFE_WORDS[i], false)) return true;
+    }
+    return false;
+}
+
+function matchesWord(token, word, partial) {
+    var variants = normalizeVariants(token);
+    if (partial) {
+        return variants.compactOne.indexOf(word.compactOne) !== -1 ||
+            variants.compactTwo.indexOf(word.compactTwo) !== -1;
+    }
+    return matchesExact(variants.compactOne, word, true) ||
+        matchesExact(variants.compactTwo, word, false);
+}
+
+function matchesExact(value, word, oneRepeat) {
+    if (oneRepeat && word.compactOne.length > 1 && value === word.compactOne) return true;
+    return value === word.compactTwo;
+}
+
+function matchesSeparatedLetters(tokens, word) {
+    var maxLength = Math.max(word.compactOne.length, word.compactTwo.length);
+    for (var i = 0; i < tokens.length; i++) {
+        if (tokens[i].length !== 1) continue;
+
+        var runStart = i;
+        var runEnd = i;
+        while (runStart > 0 && tokens[runStart - 1].length === 1) runStart--;
+        while (runEnd + 1 < tokens.length && tokens[runEnd + 1].length === 1) runEnd++;
+        if (isSafeWord(tokens.slice(runStart, runEnd + 1).join(""))) {
+            i = runEnd;
+            continue;
+        }
+
+        var combined = "";
+        for (var j = i; j < tokens.length && j < i + maxLength; j++) {
+            if (tokens[j].length !== 1) break;
+            combined += tokens[j];
+            if ((matchesExact(combined, word, true) || matchesExact(combined, word, false)) &&
+                (i === 0 || tokens[i - 1].length !== 1) &&
+                (j === tokens.length - 1 || tokens[j + 1].length !== 1)) return true;
+        }
+    }
+    return false;
+}
+
+function maskMildWords(raw, options) {
+    var antiBypass = options && typeof options.antiBypass === "boolean" ? options.antiBypass : config.chatFilterAntiBypass !== false;
+    return raw.replace(/\S+/g, function(token) {
+        var normalized = antiBypass ? normalizeVariants(token) :
+            normalizeVariants(token.toLowerCase().replace(/[^a-z]/g, ""));
+        for (var i = 0; i < SAFE_WORDS.length; i++) {
+            if (normalized.compactOne === SAFE_WORDS[i].compactOne ||
+                normalized.compactTwo === SAFE_WORDS[i].compactTwo) return token;
+        }
+        for (var j = 0; j < MILD_WORDS.length; j++) {
+            if (matchesWord(token, MILD_WORDS[j], false)) return "****";
+        }
+        return token;
+    }).trim();
 }
 
 export function getMuteDuration(offenseCount) {

@@ -3,12 +3,15 @@ const { DefinePlugin } = require("webpack");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 
 const isProd = process.env.NODE_ENV === "production";
+const clientDistDir = process.env.CLIENT_DIST_DIR ?
+  path.resolve(process.env.CLIENT_DIST_DIR) :
+  path.resolve(__dirname, "../dist/client");
 
 module.exports = {
   entry: path.resolve(__dirname, "src/index.js"),
   mode: isProd ? "production" : "development",
   output: {
-    path: path.resolve(__dirname, "../dist/client/assets"),
+    path: path.join(clientDistDir, "assets"),
     filename: "bundle.js",
     clean: true
   },
@@ -22,7 +25,7 @@ module.exports = {
       patterns: [
         {
           from: path.resolve(__dirname, "public"),
-          to: path.resolve(__dirname, "../dist/client")
+          to: clientDistDir
         }
       ]
     })

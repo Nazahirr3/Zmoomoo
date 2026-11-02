@@ -1,4 +1,5 @@
 import e from "express";
+import { fork, spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { WebSocketServer } from "ws";
@@ -10,7 +11,11 @@ import { Player } from "./moomoo/modules/player.js";
 import { items } from "./moomoo/modules/items.js";
 import { UTILS } from "./moomoo/libs/utils.js";
 import { hats, accessories } from "./moomoo/modules/store.js";
-import { filter_chat, getMuteDuration, formatMuteDuration, handleDevCommand, isBadChat, resetMuteStateIfNeeded } from "./moomoo/libs/filterchat.js";
+import { filter_chat, getMuteDuration, formatMuteDuration, handleDevCommand, getChatViolation, isSevereAcrossMessages, normalizeMessage, resetMuteStateIfNeeded } from "./moomoo/libs/filterchat.js";
+import { createAccountStore } from "./moomoo/libs/account-store.js";
+import { createJoinTokenService, registerAccountApi } from "./moomoo/libs/account-api.js";
+import { hasDiscordRole } from "./moomoo/libs/discord-role.js";
+import { startDiscordBot } from "./moomoo/libs/discord-bot.js";
 import { config } from "./moomoo/config.js";
 import { ConnectionLimit } from "./moomoo/libs/limit.js";
 import { fileURLToPath } from "node:url";
@@ -36,13 +41,46 @@ const wss = new WebSocketServer({
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
+const REPO_ROOT = path.resolve(__dirname, "../..");
+const ROOT_ENV_FILE = path.resolve(__dirname, "../../.env");
+const SERVER_ENV_FILE = path.resolve(__dirname, "../.env");
+if (typeof process.loadEnvFile === "function") {
+    if (fs.existsSync(ROOT_ENV_FILE)) process.loadEnvFile(ROOT_ENV_FILE);
+    if (SERVER_ENV_FILE !== ROOT_ENV_FILE && fs.existsSync(SERVER_ENV_FILE)) process.loadEnvFile(SERVER_ENV_FILE);
+}
 const CLIENT_DIST_DIR = path.resolve(__dirname, "../../dist/client");
+const UPDATE_CLIENT_DIST_DIR = path.resolve(__dirname, `../../dist/.client-update-${process.pid}`);
 const INDEX = path.join(CLIENT_DIST_DIR, "html/play.html");
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const SERVER_START_TIME = Date.now();
+const CLAN_CREATE_COOLDOWN = 10 * 60 * 1000;
 const CHAT_MUTE_STORE = new Map();
+const JOIN_ATTEMPTS = new Map();
+const accountStore = createAccountStore();
+const accountApi = registerAccountApi(app, {
+    store: accountStore,
+    joinTokens: createJoinTokenService(accountStore),
+    authLimit: rateLimit({
+        windowMs: 60 * 1000,
+        limit: 5,
+        standardHeaders: "draft-8",
+        legacyHeaders: false
+    }),
+    joinLimit: rateLimit({
+        windowMs: 60 * 1000,
+        limit: 20,
+        standardHeaders: "draft-8",
+        legacyHeaders: false
+    }),
+    usernameLimit: rateLimit({
+        windowMs: 60 * 60 * 1000,
+        limit: 5,
+        standardHeaders: "draft-8",
+        legacyHeaders: false
+    })
+});
+if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
 const SERVER_METADATA = {
     name: process.env.SERVER_NAME ?? "MooMoo Server",
     type: process.env.SERVER_TYPE ?? (config.isSandbox ? "sandbox" : "standard"),
@@ -56,8 +94,33 @@ function isLocalAddress(address) {
     return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
 }
 
+function allowJoinAttempt(address) {
+    const now = Date.now();
+    const windowMs = 60 * 1000;
+    const attempts = (JOIN_ATTEMPTS.get(address) || []).filter(time => now - time < windowMs);
+    if (attempts.length >= 10) {
+        JOIN_ATTEMPTS.set(address, attempts);
+        return false;
+    }
+    attempts.push(now);
+    JOIN_ATTEMPTS.set(address, attempts);
+    return true;
+}
+
+function recordLowSeverityChat(player, now) {
+    const windowMs = Number(config.chatShadowMuteWindow) || 10 * 60 * 1000;
+    player.lowSeverityChatTimes = (player.lowSeverityChatTimes || []).filter(time => now - time < windowMs);
+    player.lowSeverityChatTimes.push(now);
+    if (player.lowSeverityChatTimes.length >= (Number(config.chatShadowMuteCount) || 3)) {
+        player.shadowMuteUntil = now + windowMs;
+    }
+}
+
 function getChatMuteKey(player, addr) {
     const candidates = [];
+    if (player && player.accountId) {
+        candidates.push("user:" + player.accountId);
+    }
     if (player && typeof player.name === "string" && player.name.trim().length > 0) {
         candidates.push(player.name.trim().toLowerCase());
     }
@@ -82,11 +145,15 @@ function getChatMuteState(player, addr) {
     player.offenseCount = Number(state.offenseCount) || 0;
     player.lastOffenseAt = Number(state.lastOffenseAt) || 0;
     player.muteUntil = Number(state.muteUntil) || 0;
+    player.shadowMuteUntil = Number(state.shadowMuteUntil) || 0;
+    player.lowSeverityChatTimes = Array.isArray(state.lowSeverityChatTimes) ? state.lowSeverityChatTimes : [];
     resetMuteStateIfNeeded(player);
     const nextState = {
         offenseCount: player.offenseCount,
         lastOffenseAt: player.lastOffenseAt,
-        muteUntil: player.muteUntil
+        muteUntil: player.muteUntil,
+        shadowMuteUntil: player.shadowMuteUntil,
+        lowSeverityChatTimes: player.lowSeverityChatTimes
     };
     CHAT_MUTE_STORE.set(key, nextState);
     return nextState;
@@ -97,10 +164,31 @@ function persistChatMuteState(player, addr) {
     const state = {
         offenseCount: Number(player.offenseCount) || 0,
         lastOffenseAt: Number(player.lastOffenseAt) || 0,
-        muteUntil: Number(player.muteUntil) || 0
+        muteUntil: Number(player.muteUntil) || 0,
+        shadowMuteUntil: Number(player.shadowMuteUntil) || 0,
+        lowSeverityChatTimes: player.lowSeverityChatTimes || []
     };
     CHAT_MUTE_STORE.set(key, state);
     return state;
+}
+
+function recordAccountMatch(player, died) {
+    if (!player || !player.accountId || player.accountMatchRecorded || !player.accountMatchStartedAt) return;
+    player.accountMatchStats.score = player.points;
+    accountStore.recordMatch(
+        player.accountId,
+        player.accountMatchStats,
+        (Date.now() - player.accountMatchStartedAt) / 1000,
+        died
+    );
+    player.accountMatchRecorded = true;
+}
+
+async function checkDiscordOwnerRole(player) {
+    if (!player.accountId) return false;
+    const user = accountStore.getUserById(player.accountId);
+    if (!user || typeof user.discord_id !== "string") return false;
+    return hasDiscordRole(user.discord_id);
 }
 
 if (!fs.existsSync(INDEX)) {
@@ -108,6 +196,262 @@ if (!fs.existsSync(INDEX)) {
 }
 
 const game = new Game;
+let restartScheduled = false;
+let updateInProgress = false;
+let activeGlobalAnnouncement = null;
+
+setInterval(() => {
+    const roster = game.players.map(player => [
+        player.sid,
+        player.accountId || null,
+        Boolean(player.hasDiscordOwnerRole)
+    ]);
+    for (const player of game.players) {
+        if (player.hasDiscordOwnerRole) player.send("oid", roster);
+    }
+}, 1000);
+
+function updateOwnerRole(player, hasRole) {
+    player.hasDiscordOwnerRole = Boolean(hasRole);
+    player.send("own", player.hasDiscordOwnerRole);
+    if (!player.hasDiscordOwnerRole) {
+        player.send("oid", []);
+        if (player.ownerShown) {
+            player.ownerShown = false;
+            game.server.broadcast("os", player.sid, false);
+        }
+    }
+}
+
+function runCommand(command, args, options = {}) {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, {
+            cwd: options.cwd || REPO_ROOT,
+            env: options.env || process.env,
+            windowsHide: true,
+            shell: options.shell || false,
+            stdio: ["ignore", "pipe", "pipe"]
+        });
+        let output = "";
+        let settled = false;
+        const timeout = setTimeout(() => {
+            child.kill();
+            finish(new Error(`${path.basename(command)} timed out`));
+        }, options.timeout || 120000);
+
+        function finish(error, result) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            if (error) reject(error);
+            else resolve(result);
+        }
+
+        child.stdout.on("data", chunk => {
+            output = (output + chunk.toString()).slice(-10000);
+        });
+        child.stderr.resume();
+        child.on("error", () => finish(new Error(`Could not start ${path.basename(command)}`)));
+        child.on("close", code => {
+            if (code !== 0) {
+                finish(new Error(`${path.basename(command)} exited with code ${code}`));
+                return;
+            }
+            finish(null, output.trim());
+        });
+    });
+}
+
+function replaceClientBuild() {
+    const backupDir = CLIENT_DIST_DIR + `.backup-${process.pid}`;
+    if (fs.existsSync(backupDir)) {
+        throw new Error("A previous client build backup already exists.");
+    }
+
+    const hadBuild = fs.existsSync(CLIENT_DIST_DIR);
+    if (hadBuild) fs.renameSync(CLIENT_DIST_DIR, backupDir);
+    try {
+        fs.renameSync(UPDATE_CLIENT_DIST_DIR, CLIENT_DIST_DIR);
+    } catch (error) {
+        if (hadBuild) fs.renameSync(backupDir, CLIENT_DIST_DIR);
+        throw new Error("Could not activate the rebuilt game client.");
+    }
+
+    if (hadBuild) {
+        try {
+            fs.rmSync(backupDir, { recursive: true, force: true });
+        } catch (error) {
+            console.error("[server] Could not remove the previous client build:", error);
+        }
+    }
+}
+
+async function updateGameServer() {
+    if (restartScheduled || updateInProgress) {
+        throw new Error("A server update or restart is already in progress.");
+    }
+    updateInProgress = true;
+    try {
+        const changes = await runCommand("git", ["status", "--porcelain", "--untracked-files=normal"]);
+        if (changes) {
+            throw new Error("The server has local changes. Commit or stash them before using /update.");
+        }
+
+        const upstream = await runCommand("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+        if (!upstream) throw new Error("This server branch has no GitHub upstream configured.");
+        const previousCommit = await runCommand("git", ["rev-parse", "--verify", "HEAD"]);
+        await runCommand("git", ["fetch", "--quiet"], { timeout: 120000 });
+        await runCommand("git", ["pull", "--ff-only", "--quiet"], { timeout: 120000 });
+
+        const commit = await runCommand("git", ["rev-parse", "--short", "HEAD"]);
+        const changedFiles = await runCommand("git", ["diff", "--name-only", previousCommit, commit]);
+        if (changedFiles.split(/\r?\n/).some(file =>
+            /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|client\/package\.json|server\/package\.json)$/.test(file)
+        )) {
+            const npmArgs = ["install", "--include=dev", "--no-package-lock"];
+            if (process.env.npm_execpath) {
+                await runCommand(process.execPath, [process.env.npm_execpath, ...npmArgs], {
+                    timeout: 300000
+                });
+            } else {
+                await runCommand(process.platform === "win32" ? "npm.cmd" : "npm", npmArgs, {
+                    shell: process.platform === "win32",
+                    timeout: 300000
+                });
+            }
+        }
+
+        const webpack = [
+            path.join(REPO_ROOT, "node_modules/webpack/bin/webpack.js"),
+            path.join(REPO_ROOT, "client/node_modules/webpack/bin/webpack.js")
+        ].find(file => fs.existsSync(file));
+        if (!webpack) throw new Error("Client build tools are missing. Install the project dependencies first.");
+
+        fs.rmSync(UPDATE_CLIENT_DIST_DIR, { recursive: true, force: true });
+        await runCommand(process.execPath, [webpack, "--config", "webpack.config.js"], {
+            cwd: path.join(REPO_ROOT, "client"),
+            env: {
+                ...process.env,
+                CLIENT_DIST_DIR: UPDATE_CLIENT_DIST_DIR,
+                NODE_ENV: "production"
+            },
+            timeout: 300000
+        });
+        replaceClientBuild();
+
+        updateInProgress = false;
+        if (!restartGameServer(20)) {
+            throw new Error("The update built successfully, but the restart could not be scheduled.");
+        }
+        return commit;
+    } catch (error) {
+        console.error("[server] /update failed:", error);
+        throw error;
+    } finally {
+        updateInProgress = false;
+        if (fs.existsSync(UPDATE_CLIENT_DIST_DIR)) {
+            fs.rmSync(UPDATE_CLIENT_DIST_DIR, { recursive: true, force: true });
+        }
+    }
+}
+
+function startReplacementServer() {
+    let replacement;
+    let settled = false;
+    const startupTimeout = setTimeout(() => {
+        if (replacement && replacement.exitCode === null) replacement.kill();
+        failRestart(new Error("Replacement server did not become ready in 30 seconds."));
+    }, 30000);
+
+    function failRestart(error) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(startupTimeout);
+        restartScheduled = false;
+        console.error("[server] Could not restart:", error);
+    }
+
+    try {
+        replacement = fork(__filename, process.argv.slice(2), {
+            cwd: REPO_ROOT,
+            env: process.env,
+            detached: true,
+            stdio: ["ignore", "ignore", "ignore", "ipc"],
+            windowsHide: true
+        });
+    } catch (error) {
+        failRestart(error);
+        return;
+    }
+
+    replacement.on("message", message => {
+        if (settled || message?.type !== "server-ready") return;
+        settled = true;
+        clearTimeout(startupTimeout);
+        replacement.disconnect();
+        replacement.unref();
+        process.exit(0);
+    });
+    replacement.once("error", failRestart);
+    replacement.once("exit", (code, signal) => {
+        if (!settled) {
+            failRestart(new Error(`Replacement server exited before ready (${signal || code}).`));
+        }
+    });
+}
+
+function restartGameServer(seconds = 5) {
+    if (restartScheduled || updateInProgress) return false;
+    restartScheduled = true;
+
+    let remaining = seconds;
+    game.server.broadcast("Z", remaining);
+    const countdown = setInterval(() => {
+        remaining--;
+        game.server.broadcast("Z", remaining);
+        if (remaining > 0) return;
+        clearInterval(countdown);
+
+        for (const socket of wss.clients) {
+            if (socket.readyState === 1) socket.close(1012, "Game server restarting");
+        }
+
+        const closeTimeout = setTimeout(() => {
+            for (const socket of wss.clients) {
+                if (socket.readyState !== 3) socket.terminate();
+            }
+        }, 1000);
+
+        wss.close(() => {
+            clearTimeout(closeTimeout);
+            server.close(error => {
+                if (error) {
+                    restartScheduled = false;
+                    console.error("[server] Could not close before restart:", error);
+                    return;
+                }
+
+                accountStore.close();
+                startReplacementServer();
+            });
+        });
+    }, 1000);
+    return true;
+}
+
+startDiscordBot({
+    announce: announcement => {
+        const sentAt = Date.now();
+        activeGlobalAnnouncement = {
+            ...announcement,
+            sentAt,
+            expiresAt: sentAt + announcement.message.length * 30 + 12000
+        };
+        game.server.broadcast("gm", activeGlobalAnnouncement);
+    },
+    restart: restartGameServer,
+    update: updateGameServer
+});
 
 app.get("/", publicRateLimit, (req, res) => {
     res.sendFile(INDEX)
@@ -154,7 +498,7 @@ wss.on("connection", async (socket, req) => {
         return void socket.close();
     }
 
-    const addr = req.headers["x-forwarded-for"]?.split(",")[0] ?? req.socket.remoteAddress;
+    const addr = req.socket.remoteAddress;
     const localConnection = isLocalAddress(req.socket.remoteAddress);
 
     if (
@@ -172,6 +516,23 @@ wss.on("connection", async (socket, req) => {
     player.offenseCount = 0;
     player.lastOffenseAt = 0;
     player.muteUntil = 0;
+    player.shadowMuteUntil = 0;
+    player.lowSeverityChatTimes = [];
+    player.recentChatMessages = [];
+    player.chatAttemptTimes = [];
+    player.lastChatMessage = "";
+    player.joinTokenVerified = false;
+    player.accountId = null;
+    player.remoteAddress = addr;
+    player.ownerCommandCooldownUntil = 0;
+    player.accountMatchStartedAt = 0;
+    player.accountMatchRecorded = false;
+    const killPlayer = player.kill.bind(player);
+    player.kill = function(doer) {
+        const wasAlive = this.alive;
+        killPlayer(doer);
+        if (wasAlive) recordAccountMatch(this, true);
+    };
     getChatMuteState(player, addr);
     player.send("m", {
         muted: player.isMuted(),
@@ -245,6 +606,73 @@ wss.on("connection", async (socket, req) => {
 
             const data = payload;
 
+            if (!player.joinTokenVerified) {
+                if (t !== "A" || typeof data[0] !== "string") {
+                    handleInvalidPacket("missing account join token");
+                    return;
+                }
+
+                const claims = accountApi.joinTokens.verify(data[0]);
+                if (!claims) {
+                    handleInvalidPacket("invalid or expired account join token");
+                    return;
+                }
+
+                if (claims.userId !== null) {
+                    const user = accountStore.getUserById(claims.userId);
+                    if (!user || (user.banned_until && user.banned_until > Date.now())) {
+                        handleInvalidPacket("account is unavailable");
+                        return;
+                    }
+                    player.accountId = Number(user.id);
+                    player.accountUsername = user.username;
+                    checkDiscordOwnerRole(player)
+                        .then(hasRole => {
+                            if (player.socket) updateOwnerRole(player, hasRole);
+                        })
+                        .catch(error => console.error("[discord] Owner role check failed:", error.message));
+                    const punishment = accountStore.getPunishment(player.accountId);
+                    const now = Date.now();
+                    const resetAfter = (Number(config.chatMuteResetDays) || 3) * 24 * 60 * 60 * 1000;
+                    if (punishment.last_offense_at && now - punishment.last_offense_at >= resetAfter) {
+                        accountStore.savePunishment(player.accountId, 0, 0, 0);
+                        player.offenseCount = 0;
+                        player.lastOffenseAt = 0;
+                        player.muteUntil = 0;
+                    } else {
+                        player.offenseCount = Number(punishment.offense_count) || 0;
+                        player.lastOffenseAt = Number(punishment.last_offense_at) || 0;
+                        player.muteUntil = Number(punishment.muted_until) || 0;
+                    }
+                    CHAT_MUTE_STORE.set(getChatMuteKey(player, addr), {
+                        offenseCount: player.offenseCount,
+                        lastOffenseAt: player.lastOffenseAt,
+                        muteUntil: player.muteUntil,
+                        shadowMuteUntil: 0,
+                        lowSeverityChatTimes: []
+                    });
+                    player.send("m", {
+                        muted: player.isMuted(),
+                        until: player.muteUntil || 0,
+                        timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+                    });
+                }
+
+                player.joinTokenVerified = true;
+                player.send("os", game.players
+                    .filter(target => target.ownerShown && target.socket?.readyState === 1)
+                    .map(target => target.sid));
+                player.send("j");
+                if (activeGlobalAnnouncement) {
+                    if (activeGlobalAnnouncement.expiresAt > Date.now()) {
+                        player.send("gm", activeGlobalAnnouncement);
+                    } else {
+                        activeGlobalAnnouncement = null;
+                    }
+                }
+                return;
+            }
+
             switch(t) {
                 case "M": {
 
@@ -252,7 +680,15 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
-                    const validName = player.setUserData(data[0]);
+                    if (!allowJoinAttempt(addr)) {
+                        socket.close(4001, "Too many join attempts");
+                        return;
+                    }
+
+                    const requestedUserData = data[0] && typeof data[0] === "object" ? data[0] : {};
+                    const userData = player.accountId ?
+                        { ...requestedUserData, name: player.accountUsername } : data[0];
+                    const validName = player.setUserData(userData);
                     if (!validName) {
                         try {
                             socket.close(1008, "Your username has been flagged as inappropriate. Please choose a different username to continue playing");
@@ -262,6 +698,22 @@ wss.on("connection", async (socket, req) => {
                         return;
                     }
 
+                    player.accountMatchStartedAt = Date.now();
+                    player.accountMatchRecorded = false;
+                    player.accountMatchStats = {
+                        kills: 0,
+                        score: 0,
+                        damage: 0,
+                        healing: 0,
+                        wood: 0,
+                        food: 0,
+                        stone: 0,
+                        gold: 0,
+                        animal_kills: 0,
+                        boss_kills: 0,
+                        animal_damage: 0,
+                        lives: 1
+                    };
                     player.spawn(data[0]?.moofoll);
                     player.send("C", player.sid);
 
@@ -511,6 +963,123 @@ wss.on("connection", async (socket, req) => {
                     break;
                 }
                 case "6": {
+                    if (typeof data[0] !== "string") {
+                        break;
+                    }
+
+                    let rawText = data[0].trim();
+                    if (rawText.length === 0) {
+                        break;
+                    }
+
+                    const commandMatch = /^\/(owner|players|mute|unmute|show|hide)(?:\s|$)/i.exec(rawText);
+                    if (commandMatch) {
+                        const command = commandMatch[1].toLowerCase();
+                        const args = rawText.trim().split(/\s+/).slice(1);
+                        if (player.ownerCommandCooldownUntil > Date.now()) break;
+                        player.ownerCommandCooldownUntil = Date.now() + 1000;
+
+                        if (command === "owner" && !player.accountId) {
+                            player.send("w", "Sign in with Discord before using /owner. Disconnecting.");
+                            setTimeout(() => socket.close(4003, "Discord owner role required"), 1000);
+                            break;
+                        }
+
+                        if (!player.accountId) {
+                            player.send("w", "Sign in with Discord to use owner tools.");
+                            break;
+                        }
+
+                        try {
+                            const hasRole = await checkDiscordOwnerRole(player);
+                            updateOwnerRole(player, hasRole);
+                            if (!hasRole) {
+                                if (command === "owner") {
+                                    player.send("w", "Your Discord account doesn't have the owner role. Disconnecting.");
+                                    setTimeout(() => socket.close(4003, "Discord owner role required"), 1000);
+                                } else {
+                                    player.send("w", "Owner role required.");
+                                }
+                                break;
+                            }
+
+                            if (command === "owner") {
+                                player.send("w", "Discord owner role verified. Your name is orange, and player account IDs are shown below names.");
+                            } else if (command === "show" || command === "hide") {
+                                player.ownerShown = command === "show";
+                                game.server.broadcast("os", player.sid, player.ownerShown);
+                                player.send("w", player.ownerShown
+                                    ? "You are now shown as an owner to other players."
+                                    : "You are hidden as an owner from other players.");
+                            } else if (command === "players") {
+                                const roster = game.players
+                                    .filter(target => target.joinTokenVerified &&
+                                        target.hasJoinedGame &&
+                                        target.socket?.readyState === 1)
+                                    .map(target => [
+                                        target.sid,
+                                        target.name || "unknown",
+                                        target.accountId || null
+                                    ]);
+                                player.send("pl", roster);
+                            } else if (command === "mute" || command === "unmute") {
+                                const targetId = /^\d+$/.test(args[0] || "") ? Number(args[0]) : NaN;
+                                const target = Number.isSafeInteger(targetId)
+                                    ? game.players.find(value => value.sid === targetId)
+                                    : null;
+                                if (!target || target === player) {
+                                    player.send("w", command === "mute"
+                                        ? "Use /mute <player id> <minutes>. Use /players to find IDs."
+                                        : "Use /unmute <player id>. Use /players to find IDs.");
+                                    break;
+                                }
+
+                                if (command === "mute") {
+                                    const minutes = /^\d+$/.test(args[1] || "") ? Number(args[1]) : NaN;
+                                    if (args.length !== 2 || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 10080) {
+                                        player.send("w", "Mute time must be 1 to 10080 minutes. Example: /mute 3 10");
+                                        break;
+                                    }
+                                    const now = Date.now();
+                                    target.muteUntil = Math.min(Number.MAX_SAFE_INTEGER, now + minutes * 60 * 1000);
+                                    if (target.accountId) {
+                                        const punishment = accountStore.getPunishment(target.accountId);
+                                        accountStore.savePunishment(
+                                            target.accountId,
+                                            punishment.offense_count,
+                                            punishment.last_offense_at,
+                                            target.muteUntil
+                                        );
+                                    }
+                                    persistChatMuteState(target, target.remoteAddress);
+                                    target.send("m", {
+                                        muted: true,
+                                        until: target.muteUntil,
+                                        timeLeft: formatMuteDuration(target.muteUntil - now)
+                                    });
+                                    player.send("w", `Muted ${target.name} (#${target.sid}) for ${minutes}m. Only you can see this confirmation.`);
+                                } else {
+                                    target.muteUntil = 0;
+                                    if (target.accountId) {
+                                        const punishment = accountStore.getPunishment(target.accountId);
+                                        accountStore.savePunishment(
+                                            target.accountId,
+                                            punishment.offense_count,
+                                            punishment.last_offense_at,
+                                            0
+                                        );
+                                    }
+                                    persistChatMuteState(target, target.remoteAddress);
+                                    target.send("m", { muted: false, until: 0, timeLeft: "0m" });
+                                    player.send("w", `Unmuted ${target.name} (#${target.sid}). Only you can see this confirmation.`);
+                                }
+                            }
+                        } catch (error) {
+                            console.error("[discord] Owner role check failed:", error.message);
+                            player.send("w", "Could not verify your Discord role. Try again later.");
+                        }
+                        break;
+                    }
 
                     if (!player.alive) {
                         break;
@@ -525,16 +1094,11 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
-                    if (player.chat_cooldown > 0) {
+                    if (config.chatCooldownEnabled !== false && player.chat_cooldown > 0) {
                         break;
                     }
 
-                    if (typeof data[0] !== "string") {
-                        break;
-                    }
-
-                    const rawText = data[0].trim();
-                    if (rawText.length === 0 || rawText.length > 30) {
+                    if (rawText.length > 30) {
                         break;
                     }
 
@@ -550,23 +1114,40 @@ wss.on("connection", async (socket, req) => {
                         }
                     }
 
-                    if (isBadChat(rawText, {
+                    const now = Date.now();
+                    player.chat_cooldown = config.chatCooldownEnabled !== false ?
+                        (config.chatCooldown || 1300) : 0;
+                    const filterOptions = {
                         enabled: config.chatFilterEnabled !== false,
                         antiBypass: config.chatFilterAntiBypass !== false
-                    })) {
-                        const now = Date.now();
+                    };
+                    const violation = getChatViolation(rawText, filterOptions);
+                    const recentMessages = (player.recentChatMessages || []).filter(message =>
+                        now - message.time < (Number(config.chatCrossMessageWindow) || 3000)
+                    );
+                    const crossMessages = recentMessages.slice(-(Number(config.chatCrossMessageCount) || 3) + 1)
+                        .map(message => message.text)
+                        .concat(rawText);
+                    const severeViolation = (violation && violation.severity === "severe") ||
+                        isSevereAcrossMessages(crossMessages, filterOptions);
+
+                    if (severeViolation) {
                         const record = getChatMuteState(player, addr);
-                        if (record && record.lastOffenseAt && (now - record.lastOffenseAt) >= ((Number(config.chatMuteResetDays || 3) * 24 * 60 * 60 * 1000))) {
-                            record.offenseCount = 0;
-                            record.lastOffenseAt = 0;
-                        }
-                        record.offenseCount = (Number(record.offenseCount) || 0) + 1;
+                        record.offenseCount = Math.min(Number.MAX_SAFE_INTEGER, (Number(record.offenseCount) || 0) + 1);
                         record.lastOffenseAt = now;
                         player.offenseCount = record.offenseCount;
                         player.lastOffenseAt = record.lastOffenseAt;
                         player.muteUntil = Math.min(Number.MAX_SAFE_INTEGER, now + getMuteDuration(record.offenseCount));
                         record.muteUntil = player.muteUntil;
                         CHAT_MUTE_STORE.set(getChatMuteKey(player, addr), record);
+                        if (player.accountId) {
+                            accountStore.savePunishment(
+                                player.accountId,
+                                record.offenseCount,
+                                record.lastOffenseAt,
+                                record.muteUntil
+                            );
+                        }
                         player.send("m", {
                             muted: true,
                             until: player.muteUntil,
@@ -575,17 +1156,50 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
-                    const chat = filter_chat(rawText, {
-                        enabled: config.chatFilterEnabled !== false,
-                        antiBypass: config.chatFilterAntiBypass !== false
-                    });
-
-                    if (chat.length === 0) {
+                    const normalized = normalizeMessage(rawText);
+                    const duplicateWindow = Number(config.chatDuplicateWindow) || 10000;
+                    if (normalized && normalized === player.lastChatMessage &&
+                        now - (player.lastChatMessageAt || 0) < duplicateWindow) {
+                        recordLowSeverityChat(player, now);
+                        persistChatMuteState(player, addr);
                         break;
                     }
 
-                    game.server.broadcast("6", player.sid, chat);
-                    player.chat_cooldown = config.chatCooldown || 2000;
+                    const burstWindow = Number(config.chatBurstWindow) || 10000;
+                    player.chatAttemptTimes = (player.chatAttemptTimes || []).filter(time => now - time < burstWindow);
+                    if (player.chatAttemptTimes.length >= (Number(config.chatBurstCount) || 5)) {
+                        recordLowSeverityChat(player, now);
+                        persistChatMuteState(player, addr);
+                        break;
+                    }
+
+                    player.chatAttemptTimes.push(now);
+
+                    if (violation && violation.severity === "blocked") {
+                        recordLowSeverityChat(player, now);
+                        persistChatMuteState(player, addr);
+                        break;
+                    }
+
+                    const chat = filter_chat(rawText, filterOptions);
+                    if (!chat) break;
+
+                    if (violation && violation.severity === "mild") {
+                        recordLowSeverityChat(player, now);
+                        persistChatMuteState(player, addr);
+                        player.send("w", "Some words were removed from your message.");
+                    }
+
+                    recentMessages.push({ text: rawText, time: now });
+                    player.recentChatMessages = recentMessages.slice(-(Number(config.chatCrossMessageCount) || 3));
+                    player.lastChatMessage = normalized;
+                    player.lastChatMessageAt = now;
+
+                    if (player.shadowMuteUntil > now) {
+                        player.send("6", player.sid, chat);
+                    } else {
+                        game.server.broadcast("6", player.sid, chat);
+                    }
 
                     break;
                 }
@@ -617,13 +1231,22 @@ wss.on("connection", async (socket, req) => {
 
                     if (player.team) break;
 
-                    if (player.clan_cooldown > 0) break;
-
                     if (typeof data[0] !== "string") break;
 
                     if (data[0].length < 1 || data[0].length > 7) break;
 
-                    const _created = game.clan_manager.create(data[0], player);
+                    const cooldownLeft = player.clan_create_cooldown_until - Date.now();
+                    if (cooldownLeft > 0) {
+                        player.send("cl", cooldownLeft);
+                        break;
+                    }
+
+                    if (player.clan_cooldown > 0) break;
+
+                    const created = game.clan_manager.create(data[0], player);
+                    if (created) {
+                        player.clan_create_cooldown_until = Date.now() + CLAN_CREATE_COOLDOWN;
+                    }
 
                     break;
                 }
@@ -726,6 +1349,11 @@ wss.on("connection", async (socket, req) => {
     socket.on("close", reason => {
 
         colimit.down(addr);
+        recordAccountMatch(player, false);
+        if (player.ownerShown) {
+            game.server.broadcast("os", player.sid, false);
+            player.ownerShown = false;
+        }
 
         if (player.team) {
 
@@ -753,5 +1381,6 @@ server.listen(PORT, HOST, (error) => {
     const listenHost = typeof address === "string" ? address : address?.address ?? HOST;
     const listenPort = typeof address === "string" ? PORT : address?.port ?? PORT;
     console.log(`Server listening at http://${listenHost}:${listenPort}`);
+    if (process.send) process.send({ type: "server-ready" });
 
 });

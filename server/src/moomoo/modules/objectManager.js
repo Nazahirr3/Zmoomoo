@@ -1,4 +1,5 @@
 var mathFloor = Math.floor;
+var mathCeil = Math.ceil;
 var mathABS = Math.abs;
 var mathCOS = Math.cos;
 var mathSIN = Math.sin;
@@ -19,17 +20,18 @@ export class ObjectManager {
         this.setObjectGrids = function(obj) {
             var objX = Math.min(config.mapScale, Math.max(0, obj.x));
             var objY = Math.min(config.mapScale, Math.max(0, obj.y));
-            for (var x = 0; x < config.colGrid; ++x) {
-                tmpX = x * tmpS;
-                for (var y = 0; y < config.colGrid; ++y) {
-                    tmpY = y * tmpS;
-                    if (objX + obj.scale >= tmpX && objX - obj.scale <= tmpX + tmpS && objY + obj.scale >= tmpY && objY - obj.scale <= tmpY + tmpS) {
-                        if (!this.grids[x + "_" + y]) {
-                            this.grids[x + "_" + y] = [];
-                        }
-                        this.grids[x + "_" + y].push(obj);
-                        obj.gridLocations.push(x + "_" + y);
+            var minX = Math.max(0, mathCeil((objX - obj.scale) / tmpS) - 1);
+            var maxX = Math.min(config.colGrid - 1, mathFloor((objX + obj.scale) / tmpS));
+            var minY = Math.max(0, mathCeil((objY - obj.scale) / tmpS) - 1);
+            var maxY = Math.min(config.colGrid - 1, mathFloor((objY + obj.scale) / tmpS));
+            for (var x = minX; x <= maxX; ++x) {
+                for (var y = minY; y <= maxY; ++y) {
+                    var key = x + "_" + y;
+                    if (!this.grids[key]) {
+                        this.grids[key] = [];
                     }
+                    this.grids[key].push(obj);
+                    obj.gridLocations.push(key);
                 }
             }
         };
@@ -86,69 +88,67 @@ export class ObjectManager {
             tmpX = mathFloor(xPos / tmpS);
             tmpY = mathFloor(yPos / tmpS);
             tmpArray.length = 0;
-            try {
-                if (this.grids[tmpX + "_" + tmpY]) {
-                    tmpArray.push(this.grids[tmpX + "_" + tmpY]);
-                }
-                if (xPos + s >= (tmpX + 1) * tmpS) {
-                    // RIGHT
-                    tmpGrid = this.grids[tmpX + 1 + "_" + tmpY];
-                    if (tmpGrid) {
-                        tmpArray.push(tmpGrid);
-                    }
-                    if (tmpY && yPos - s <= tmpY * tmpS) {
-                        // TOP RIGHT
-                        tmpGrid = this.grids[tmpX + 1 + "_" + (tmpY - 1)];
-                        if (tmpGrid) {
-                            tmpArray.push(tmpGrid);
-                        }
-                    } else {
-                        if (yPos + s >= (tmpY + 1) * tmpS) {
-                            // BOTTOM RIGHT
-                            tmpGrid = this.grids[tmpX + 1 + "_" + (tmpY + 1)];
-                            if (tmpGrid) {
-                                tmpArray.push(tmpGrid);
-                            }
-                        }
-                    }
-                }
-                if (tmpX && xPos - s <= tmpX * tmpS) {
-                    // LEFT
-                    tmpGrid = this.grids[tmpX - 1 + "_" + tmpY];
-                    if (tmpGrid) {
-                        tmpArray.push(tmpGrid);
-                    }
-                    if (tmpY && yPos - s <= tmpY * tmpS) {
-                        // TOP LEFT
-                        tmpGrid = this.grids[tmpX - 1 + "_" + (tmpY - 1)];
-                        if (tmpGrid) {
-                            tmpArray.push(tmpGrid);
-                        }
-                    } else {
-                        if (yPos + s >= (tmpY + 1) * tmpS) {
-                            // BOTTOM LEFT
-                            tmpGrid = this.grids[tmpX - 1 + "_" + (tmpY + 1)];
-                            if (tmpGrid) {
-                                tmpArray.push(tmpGrid);
-                            }
-                        }
-                    }
-                }
-                if (yPos + s >= (tmpY + 1) * tmpS) {
-                    // BOTTOM
-                    tmpGrid = this.grids[tmpX + "_" + (tmpY + 1)];
-                    if (tmpGrid) {
-                        tmpArray.push(tmpGrid);
-                    }
+            if (this.grids[tmpX + "_" + tmpY]) {
+                tmpArray.push(this.grids[tmpX + "_" + tmpY]);
+            }
+            if (xPos + s >= (tmpX + 1) * tmpS) {
+                // RIGHT
+                tmpGrid = this.grids[tmpX + 1 + "_" + tmpY];
+                if (tmpGrid) {
+                    tmpArray.push(tmpGrid);
                 }
                 if (tmpY && yPos - s <= tmpY * tmpS) {
-                    // TOP
-                    tmpGrid = this.grids[tmpX + "_" + (tmpY - 1)];
+                    // TOP RIGHT
+                    tmpGrid = this.grids[tmpX + 1 + "_" + (tmpY - 1)];
                     if (tmpGrid) {
                         tmpArray.push(tmpGrid);
                     }
+                } else {
+                    if (yPos + s >= (tmpY + 1) * tmpS) {
+                        // BOTTOM RIGHT
+                        tmpGrid = this.grids[tmpX + 1 + "_" + (tmpY + 1)];
+                        if (tmpGrid) {
+                            tmpArray.push(tmpGrid);
+                        }
+                    }
                 }
-            } catch (e) {}
+            }
+            if (tmpX && xPos - s <= tmpX * tmpS) {
+                // LEFT
+                tmpGrid = this.grids[tmpX - 1 + "_" + tmpY];
+                if (tmpGrid) {
+                    tmpArray.push(tmpGrid);
+                }
+                if (tmpY && yPos - s <= tmpY * tmpS) {
+                    // TOP LEFT
+                    tmpGrid = this.grids[tmpX - 1 + "_" + (tmpY - 1)];
+                    if (tmpGrid) {
+                        tmpArray.push(tmpGrid);
+                    }
+                } else {
+                    if (yPos + s >= (tmpY + 1) * tmpS) {
+                        // BOTTOM LEFT
+                        tmpGrid = this.grids[tmpX - 1 + "_" + (tmpY + 1)];
+                        if (tmpGrid) {
+                            tmpArray.push(tmpGrid);
+                        }
+                    }
+                }
+            }
+            if (yPos + s >= (tmpY + 1) * tmpS) {
+                // BOTTOM
+                tmpGrid = this.grids[tmpX + "_" + (tmpY + 1)];
+                if (tmpGrid) {
+                    tmpArray.push(tmpGrid);
+                }
+            }
+            if (tmpY && yPos - s <= tmpY * tmpS) {
+                // TOP
+                tmpGrid = this.grids[tmpX + "_" + (tmpY - 1)];
+                if (tmpGrid) {
+                    tmpArray.push(tmpGrid);
+                }
+            }
             return tmpArray;
         };
 

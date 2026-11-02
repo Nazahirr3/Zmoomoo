@@ -83,9 +83,19 @@
         <div id="errorNotificationActions"><button id="errorNotificationAction" type="button">Close</button></div>
     </div>
     <div id="shutdownDisplay" hidden></div>
+    <div id="globalAnnouncement" role="status" aria-live="polite">
+        <div id="globalAnnouncementHeader">
+            <div id="globalAnnouncementLabel">GLOBAL MESSAGE</div>
+        </div>
+        <div id="globalAnnouncementText"></div>
+        <div id="globalAnnouncementSender">
+            <div id="globalAnnouncementSenderName"></div>
+            <div id="globalAnnouncementSenderRole"></div>
+        </div>
+    </div>
     <div id="mainMenu">
         <div id="menuContainer">
-            <div id="gameName">ZMOOMOO.io</div>
+            <div id="gameName">ZMOOMOO.io<span id="gameVersion">(Beta v1)</span></div>
             <div id="loadingText">Loading...</div>
             <div id="menuCardHolder" style="display:none">
                 <!-- Center Column - Tabs -->
@@ -151,7 +161,7 @@
                                             against other
                                             players.
                                         </div>
-                                        <div class="menuText"
+                                        <div id="accountDescription" class="menuText"
                                             style="font-size: 14px; color: #888; margin-bottom: 12px;">
                                             <strong>Objective:</strong> Collect resources, build structures, and survive
                                             against
@@ -422,28 +432,72 @@
                 
                 <!-- Right Column - Account -->
                 <div class="menuColumn rightColumn">
-                    <div class="menuCard"
+                    <div id="accountCard" class="menuCard"
                         style="padding: 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;">
                         <div class="accountIcon" style="margin-bottom: 6px;">
                             <i class="material-icons" style="font-size: 95px; color: #7ee559;">account_circle</i>
                         </div>
-                        <div class="menuHeader" style="text-align:center; margin-bottom: 6px; font-size: 22px;">Welcome
+                        <div id="accountWelcome" class="menuHeader" style="text-align:center; margin-bottom: 6px; font-size: 22px;">Welcome
                             to zmoomoo.io</div>
-                        <div class="menuText"
+                        <div id="accountIntro" class="menuText"
                             style="text-align:center; margin-bottom: 14px; font-size: 17px; line-height: 1.4;">Sign in
-                            to save your
-                            progress, track statistics, and unlock exclusive features.</div>
+                            with Discord to save your progress and track your stats. New accounts are created on the
+                            first sign-in.</div>
+                        <div id="accountNotice" role="status" style="display:none; margin-bottom:8px; color:#b33; text-align:center; font-size:13px;"></div>
                         <div class="buttonGroup" style="width: 100%; gap: 8px;">
-                            <div class="menuButton primaryButton" style="padding: 10px 16px; font-size: 16px;">
-                                <span>Sign In</span>
+                            <a id="accountSignIn" href="/api/auth/discord" class="menuButton primaryButton accountAuthButton" style="padding: 10px 16px; font-size: 16px;">Sign in with Discord</a>
+                            <a id="accountCreate" href="/api/auth/discord" class="menuButton secondaryButton accountAuthButton" style="padding: 10px 16px; font-size: 16px;">Create account</a>
+                        </div>
+                        <div id="accountProfile" style="display:none; width:100%; text-align:center;">
+                            <div style="font-size:14px; margin:4px 0 8px;">Signed in as <strong id="accountName"></strong></div>
+                            <div id="accountStats" class="accountStats">
+                                <div class="accountStatsGroup">
+                                    <div class="accountStatsHeading">Combat</div>
+                                    <div class="accountStatsGrid">
+                                        <div><strong id="accountStatKills">0</strong><span>Kills</span></div>
+                                        <div><strong id="accountStatDeaths">0</strong><span>Deaths</span></div>
+                                        <div><strong id="accountStatKd">0.00</strong><span>K/D</span></div>
+                                        <div><strong id="accountStatDamage">0</strong><span>Damage</span></div>
+                                        <div><strong id="accountStatHealing">0</strong><span>Healing</span></div>
+                                    </div>
+                                </div>
+                                <div class="accountStatsGroup">
+                                    <div class="accountStatsHeading">Lifetime resources</div>
+                                    <div class="accountStatsGrid">
+                                        <div><strong id="accountStatWood">0</strong><span>Wood</span></div>
+                                        <div><strong id="accountStatFood">0</strong><span>Food</span></div>
+                                        <div><strong id="accountStatStone">0</strong><span>Stone</span></div>
+                                        <div><strong id="accountStatGold">0</strong><span>Gold</span></div>
+                                    </div>
+                                </div>
+                                <div class="accountStatsGroup">
+                                    <div class="accountStatsHeading">Lifetime kills</div>
+                                    <div class="accountStatsGrid">
+                                        <div><strong id="accountStatAnimals">0</strong><span>Animals</span></div>
+                                        <div><strong id="accountStatBosses">0</strong><span>Bosses</span></div>
+                                        <div><strong id="accountStatAnimalDamage">0</strong><span>Animal dmg</span></div>
+                                    </div>
+                                </div>
+                                <div class="accountStatsGroup">
+                                    <div class="accountStatsHeading">More stats</div>
+                                    <div class="accountStatsGrid">
+                                        <div><strong id="accountStatBestScore">0</strong><span>Best score</span></div>
+                                        <div><strong id="accountStatBestKills">0</strong><span>Best kills</span></div>
+                                        <div><strong id="accountStatLives">0</strong><span>Lives</span></div>
+                                        <div><strong id="accountStatPlayed">0m</strong><span>Played</span></div>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="menuButton secondaryButton" style="padding: 10px 16px; font-size: 16px;">
-                                <span>Create Account</span>
+                            <input id="accountUsernameInput" type="text" maxlength="15" placeholder="Choose your player name" style="width:100%; box-sizing:border-box; margin-bottom:6px;">
+                            <button id="accountSaveName" type="button" class="menuButton secondaryButton" style="padding:8px 12px; font-size:14px;">Save player name</button>
+                            <div style="display:flex; gap:6px; margin-top:6px;">
+                                <button id="accountLogout" type="button" class="menuButton secondaryButton" style="padding:8px 10px; font-size:13px;">Sign out</button>
+                                <button id="accountDelete" type="button" class="menuButton secondaryButton" style="padding:8px 10px; font-size:13px; background:#b84c4c; box-shadow:0 4px 0 #873737;">Delete account</button>
                             </div>
                         </div>
                         <div class="infoBox" style="margin-top: 10px; padding: 10px;">
                             <i class="material-icons" style="font-size: 16px;">info</i>
-                            <span style="font-size: 12px;">Guest mode: Play without an account</span>
+                            <span id="accountGuestMessage" style="font-size: 12px;">Guest mode: Play without an account</span>
                         </div>
                     </div>
                 </div>
@@ -456,7 +510,7 @@
             <span style="color: #666;">|</span>
             <a href="https://frvr.com/legal#TermsofService" target="_blank">Terms</a>
             <span style="color: #666;">|</span>
-            <a href="https://frvr.com/legal#PrivacyPolicy" target="_blank">Privacy</a>
+            <a href="/html/privacy.html">Privacy</a>
         </div>
 
         <div id="linksContainer2" class="legacyHidden"><a href="./docs/versions.txt" target="_blank"
@@ -493,13 +547,25 @@
     <div id="touch-controls-fullscreen"></div>
     <div id="gameUI" style="display:none">
         <div id="chatHolder" style="display:none">
-            <div id="chatMuteStatus" style="display:none; color:rgba(255,255,255,0.75); background:transparent; border:none; padding:0; margin:0 auto 6px; font-size:18px; font-weight:700; line-height:1.1; white-space:nowrap; text-shadow:0 1px 2px rgba(0,0,0,0.6); max-width:90vw; overflow:hidden; text-overflow:ellipsis;">You're muted for 0s</div>
+            <div id="chatRoster" style="display:none"></div>
             <input id="chatBox" placeholder="Enter Message" maxlength="30" style="opacity: 1; width: 220px; max-width: 90vw; display:block; margin:0 auto; text-align:left; padding:6px 12px;">
         </div>
         <div id="upgradeHolder"></div>
         <div id="upgradeCounter"></div>
         <div id="topInfoHolder">
-            <div id="leaderboard">Leaderboard<div id="leaderboardData"></div>
+            <div id="leaderboard">
+                <button id="leaderboardTitle" type="button" aria-label="Flip leaderboard">Leaderboard</button>
+                <div id="leaderboardScene">
+                    <div id="leaderboardCard">
+                        <section class="leaderboardSide leaderboardFront">
+                            <div id="leaderboardData"></div>
+                        </section>
+                        <section class="leaderboardSide leaderboardBack">
+                            <div id="leaderboardDataBack"></div>
+                        </section>
+                    </div>
+                </div>
+                <button id="leaderboardFlip" type="button">11-20</button>
             </div>
             <div></div>
             <div id="killCounter" class="resourceDisplay"></div>
@@ -541,7 +607,14 @@
             <div id="allianceHolder"></div>
             <div id="allianceManager"></div>
         </div>
-    </div><canvas id="gameCanvas"></canvas>
+        <div id="clanRateLimit" role="alertdialog" aria-live="polite">
+            <div id="clanRateLimitTitle">Rate limit</div>
+            <div id="clanRateLimitText">You're creating clans too fast. Please try again later.</div>
+            <div id="clanRateLimitTimer"></div>
+            <button id="clanRateLimitClose" type="button">Close</button>
+        </div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
 
     <script>
         document.querySelectorAll('.keybindInput').forEach(input => {

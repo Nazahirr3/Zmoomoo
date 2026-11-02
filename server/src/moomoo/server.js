@@ -198,7 +198,7 @@ export class Game {
                     }
                 }
 
-                player.send("a", _sent_players.length > 0 ? _sent_players : null);
+                player.send("a", _sent_players);
 
                 const aiPayload = [];
                 for (let aiI = 0; aiI < activeAis.length; aiI++) {
@@ -217,7 +217,7 @@ export class Game {
                 }
                 player.send("I", aiPayload.length > 0 ? aiPayload : null);
 
-                player.send("H", _sent_objects.length > 0 ? _sent_objects : null);
+                player.send("H", _sent_objects);
 
                 if (minimap_ext.length === 0) continue;
 

@@ -12,9 +12,13 @@ var mathPI = Math.PI;
 export class Player {
 
     is_owner = false;
+    hasDiscordOwnerRole = false;
+    ownerShown = false;
+    hasJoinedGame = false;
     notify = new Set;
     chat_cooldown = 0;
     clan_cooldown = 0;
+    clan_create_cooldown_until = 0;
     ping_cooldown = 0;
 
     is_bot = false;
@@ -77,6 +81,7 @@ export class Player {
         this._collisionAlready = new Set();
 
         this.spawn = function(moofoll) {
+            this.hasJoinedGame = true;
             this.active = true;
             this.alive = true;
             this.lockMove = false;
@@ -185,14 +190,22 @@ export class Player {
         this.setUserData = function(data) {
             if (data) {
                 this.name = "unknown";
-                var name = data.name + "";
+                var name = (data.name + "").replace(/\s+/g, " ").trim();
+                if (!name) {
+                    this.skinColor = 0;
+                    if (config.skinColors[data.skin]) {
+                        this.skinColor = data.skin;
+                    }
+                    return true;
+                }
+                var invalidName = nameFilter.isBadName(name);
 
-                name = name.slice(0, config.maxNameLength);
                 name = name.replace(/[^\w:\(\)\/? -]+/gmi, " ");
                 name = name.replace(/[^\x00-\x7F]/g, " ");
+                name = name.replace(/\s+/g, " ");
                 name = name.trim();
 
-                if (name.length === 0 || nameFilter.isBadName(name)) {
+                if (invalidName || name.length === 0 || name.length > config.maxNameLength || nameFilter.isBadName(name)) {
                     this.name = "unknown";
                     this.skinColor = 0;
                     if (config.skinColors[data.skin]) {
@@ -458,11 +471,19 @@ export class Player {
             if (amount > 0 && this.health >= this.maxHealth) return false;
             if (amount < 0 && this.skin) amount *= this.skin.dmgMult || 1;
             if (amount < 0 && this.tail) amount *= this.tail.dmgMult || 1;
+            var oldHealth = this.health;
             if (amount < 0) this.hitTime = Date.now();
             this.health += amount;
             if (this.health > this.maxHealth) {
                 amount -= this.health - this.maxHealth;
                 this.health = this.maxHealth;
+            }
+            if (doer && doer.isPlayer && doer.accountMatchStats) {
+                if (amount < 0) {
+                    doer.accountMatchStats.damage += Math.min(-amount, Math.max(0, oldHealth));
+                } else if (amount > 0) {
+                    doer.accountMatchStats.healing += amount;
+                }
             }
             if (this.health <= 0) this.kill(doer);
             for (var i = 0; i < players.length; ++i) {
@@ -475,6 +496,7 @@ export class Player {
         this.kill = function(doer) {
             if (doer && doer.alive) {
                 doer.kills++;
+                if (doer.accountMatchStats) doer.accountMatchStats.kills++;
                 var goldStealPct = config.combat ? config.combat.goldStealPercent : 0.5;
                 var killScoreMult = config.combat ? config.combat.killScoreMultiplier : 100;
                 if (doer.skin && doer.skin.goldSteal) scoreCallback(doer, Math.round(this.points * goldStealPct));
@@ -488,6 +510,13 @@ export class Player {
 
         this.addResource = function(type, amount, auto) {
             if (!auto && amount > 0) this.addWeaponXP(amount);
+            if (amount > 0 && this.accountMatchStats) {
+                var resource = config.resourceTypes[type];
+                var stat = resource === "points" ? "gold" : resource;
+                if (Object.prototype.hasOwnProperty.call(this.accountMatchStats, stat)) {
+                    this.accountMatchStats[stat] += amount;
+                }
+            }
             this[config.resourceTypes[type]] += amount;
             this.send("N", config.resourceTypes[type], this[config.resourceTypes[type]], 1);
         };

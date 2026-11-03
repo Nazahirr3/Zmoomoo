@@ -106,8 +106,19 @@ async function registerCommands(token, guildId) {
 }
 
 async function replyToInteraction(interaction, content) {
+    const interactionId = String(interaction?.id ?? "");
+    const interactionToken = String(interaction?.token ?? "");
+
+    const isValidInteractionId = /^[0-9]{5,30}$/.test(interactionId);
+    const isValidInteractionToken = /^[A-Za-z0-9._-]{10,200}$/.test(interactionToken);
+
+    if (!isValidInteractionId || !isValidInteractionToken) {
+        console.error("[discord] Refusing to reply: invalid interaction id/token.");
+        return;
+    }
+
     const response = await fetch(
-        `https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`,
+        `https://discord.com/api/v10/interactions/${encodeURIComponent(interactionId)}/${encodeURIComponent(interactionToken)}/callback`,
         {
             method: "POST",
             headers: { "Content-Type": "application/json" },

@@ -355,10 +355,14 @@ export function startDiscordBot(options = {}) {
                     socket.close();
                     return;
                 }
-                const safeHeartbeatInterval = Math.min(
+                const safeHeartbeatInterval = Math.floor(Math.min(
                     MAX_HEARTBEAT_INTERVAL_MS,
                     Math.max(MIN_HEARTBEAT_INTERVAL_MS, heartbeatInterval)
-                );
+                ));
+
+                if (heartbeat) {
+                    clearInterval(heartbeat);
+                }
 
                 heartbeat = setInterval(() => {
                     if (!heartbeatAcknowledged) {

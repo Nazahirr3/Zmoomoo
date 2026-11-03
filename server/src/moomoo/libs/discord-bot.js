@@ -120,8 +120,14 @@ async function replyToInteraction(interaction, content) {
 }
 
 async function editInteractionReply(interaction, content) {
+    const { id, token } = getValidatedInteractionRouteParams(interaction);
+    const webhookUrl = new URL(
+        `/api/v10/webhooks/${encodeURIComponent(id)}/${encodeURIComponent(token)}/messages/@original`,
+        "https://discord.com"
+    );
+
     const response = await fetch(
-        `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`,
+        webhookUrl.toString(),
         {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },

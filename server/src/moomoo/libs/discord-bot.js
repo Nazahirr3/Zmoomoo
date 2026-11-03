@@ -1,6 +1,8 @@
 import WebSocket from "ws";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
+const MIN_HEARTBEAT_INTERVAL_MS = 1000;
+const MAX_HEARTBEAT_INTERVAL_MS = 120000;
 const COMMANDS = [
     {
         name: "ping",
@@ -347,6 +349,17 @@ export function startDiscordBot(options = {}) {
             if (packet.s !== null && packet.s !== undefined) sequence = packet.s;
 
             if (packet.op === 10) {
+                const heartbeatInterval = Number(packet?.d?.heartbeat_interval);
+                if (!Number.isFinite(heartbeatInterval) || heartbeatInterval <= 0) {
+                    console.error("[discord] Invalid heartbeat interval received:", packet?.d?.heartbeat_interval);
+                    socket.close();
+                    return;
+                }
+                const safeHeartbeatInterval = Math.min(
+                    MAX_HEARTBEAT_INTERVAL_MS,
+                    Math.max(MIN_HEARTBEAT_INTERVAL_MS, heartbeatInterval)
+                );
+
                 heartbeat = setInterval(() => {
                     if (!heartbeatAcknowledged) {
                         socket.close();
@@ -354,7 +367,7 @@ export function startDiscordBot(options = {}) {
                     }
                     heartbeatAcknowledged = false;
                     socket.send(JSON.stringify({ op: 1, d: sequence }));
-                }, packet.d.heartbeat_interval);
+                }, safeHeartbeatInterval);
                 socket.send(JSON.stringify({
                     op: 2,
                     d: {

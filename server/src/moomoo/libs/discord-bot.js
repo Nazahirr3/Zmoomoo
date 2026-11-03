@@ -151,7 +151,8 @@ async function sendChannelMessage(interaction, token) {
     const options = interaction.data.options || [];
     const message = options.find(option => option.name === "message")?.value;
     const channelId = options.find(option => option.name === "channel")?.value;
-    if (typeof message !== "string" || !message.trim() || typeof channelId !== "string") {
+    const isValidChannelId = typeof channelId === "string" && /^\d{17,20}$/.test(channelId);
+    if (typeof message !== "string" || !message.trim() || !isValidChannelId) {
         return replyToInteraction(interaction, "Add a message and choose a channel.");
     }
 

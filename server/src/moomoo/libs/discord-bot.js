@@ -133,9 +133,31 @@ async function editInteractionReply(interaction, content) {
     }
 }
 
+function getValidatedInteractionRouteParams(interaction) {
+    const id = String(interaction?.id ?? "");
+    const token = String(interaction?.token ?? "");
+
+    if (!/^\d+$/.test(id)) {
+        throw new Error("Invalid interaction id.");
+    }
+
+    // Discord interaction tokens are opaque, but should be limited to safe URL token chars.
+    if (!/^[A-Za-z0-9._-]+$/.test(token)) {
+        throw new Error("Invalid interaction token.");
+    }
+
+    return { id, token };
+}
+
 async function deferInteraction(interaction) {
+    const { id, token } = getValidatedInteractionRouteParams(interaction);
+    const callbackUrl = new URL(
+        `/api/v10/interactions/${encodeURIComponent(id)}/${encodeURIComponent(token)}/callback`,
+        "https://discord.com"
+    );
+
     const response = await fetch(
-        `https://discord.com/api/v10/interactions/${interaction.id}/${interaction.token}/callback`,
+        callbackUrl.toString(),
         {
             method: "POST",
             headers: { "Content-Type": "application/json" },

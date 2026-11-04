@@ -891,8 +891,11 @@ $.fn.position = function( options ) {
 		} catch ( e ) {
 			target = $();
 		}
-	} else {
+	} else if ( options.of && ( options.of.nodeType || $.isWindow( options.of ) || options.of === document ||
+			options.of.jquery || options.of.preventDefault ) ) {
 		target = $( options.of );
+	} else {
+		target = $();
 	}
 
 	dimensions = getDimensions( target );

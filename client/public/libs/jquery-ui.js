@@ -893,7 +893,15 @@ $.fn.position = function( options ) {
 		}
 	} else if ( options.of && ( options.of.nodeType || $.isWindow( options.of ) || options.of === document ||
 			options.of.jquery || options.of.preventDefault ) ) {
-		target = $( options.of );
+		if ( options.of.jquery ) {
+			target = options.of;
+		} else if ( options.of.nodeType || $.isWindow( options.of ) || options.of === document ) {
+			target = $( options.of );
+		} else if ( options.of.preventDefault && options.of.target ) {
+			target = $( options.of.target );
+		} else {
+			target = $();
+		}
 	} else {
 		target = $();
 	}

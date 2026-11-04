@@ -132,6 +132,7 @@ export function registerAccountApi(app, options = {}) {
         const state = randomBytes(24).toString("base64url");
         response.cookie(STATE_COOKIE, state, {
             ...cookieOptions(request, 10 * 60 * 1000),
+            secure: true,
             httpOnly: true,
             path: "/api/auth/discord/callback"
         });

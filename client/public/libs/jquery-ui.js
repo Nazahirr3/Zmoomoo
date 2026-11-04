@@ -902,8 +902,10 @@ $.fn.position = function( options ) {
 				} catch ( e ) {
 					target = $();
 				}
-			} else {
+			} else if ( options.of.nodeType || $.isWindow( options.of ) || options.of === document ) {
 				target = $( options.of );
+			} else {
+				target = $();
 			}
 		} else if ( options.of.preventDefault && options.of.target ) {
 			target = $( options.of.target );

@@ -896,7 +896,15 @@ $.fn.position = function( options ) {
 		if ( options.of.jquery ) {
 			target = options.of;
 		} else if ( options.of.nodeType || $.isWindow( options.of ) || options.of === document ) {
-			target = $( options.of );
+			if ( typeof options.of === "string" ) {
+				try {
+					target = $( document.querySelector( options.of ) );
+				} catch ( e ) {
+					target = $();
+				}
+			} else {
+				target = $( options.of );
+			}
 		} else if ( options.of.preventDefault && options.of.target ) {
 			target = $( options.of.target );
 		} else {

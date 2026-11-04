@@ -903,7 +903,11 @@ $.fn.position = function( options ) {
 					target = $();
 				}
 			} else if ( options.of.nodeType || $.isWindow( options.of ) || options.of === document ) {
-				target = $( options.of );
+				if ( typeof options.of !== "string" ) {
+					target = $( options.of );
+				} else {
+					target = $();
+				}
 			} else {
 				target = $();
 			}

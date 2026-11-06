@@ -361,14 +361,6 @@
                                             </div>
                                             <div class="settingItem">
                                                 <div class="settingLabel">
-                                                    <div class="settingHelp" data-setting="chatFilter" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
-                                                    <i class="material-icons">gpp_maybe</i>
-                                                    <span>Chat filter</span>
-                                                </div>
-                                                <input id="chatFilterEnabled" type="checkbox" class="settingCheckbox" checked />
-                                            </div>
-                                            <div class="settingItem">
-                                                <div class="settingLabel">
                                                     <div class="settingHelp" data-setting="highGraphics" style="cursor: pointer; background: #e0e0e0; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; color: #666; margin-right: 8px;">?</div>
                                                     <i class="material-icons">hd</i>
                                                     <span>High Graphics</span>
@@ -449,7 +441,12 @@
                             <a id="accountCreate" href="/api/auth/discord" class="menuButton secondaryButton accountAuthButton" style="padding: 10px 16px; font-size: 16px;">Create account</a>
                         </div>
                         <div id="accountProfile" style="display:none; width:100%; text-align:center;">
-                            <div style="font-size:14px; margin:4px 0 8px;">Signed in as <strong id="accountName"></strong></div>
+                            <div class="accountPlayerName">
+                                <span class="accountPlayerNameTitle">Account username <button id="accountNameHelp" class="accountNameHelp" type="button" aria-label="Account username information">?</button></span>
+                                <input id="accountUsernameInput" type="text" maxlength="15" placeholder="Choose your account username">
+                                <button id="accountSaveName" type="button" class="menuButton secondaryButton">Save username</button>
+                                <small id="accountUsernameCooldown" class="accountUsernameCooldown"></small>
+                            </div>
                             <div id="accountStats" class="accountStats">
                                 <div class="accountStatsGroup">
                                     <div class="accountStatsHeading">Combat</div>
@@ -488,14 +485,12 @@
                                     </div>
                                 </div>
                             </div>
-                            <input id="accountUsernameInput" type="text" maxlength="15" placeholder="Choose your player name" style="width:100%; box-sizing:border-box; margin-bottom:6px;">
-                            <button id="accountSaveName" type="button" class="menuButton secondaryButton" style="padding:8px 12px; font-size:14px;">Save player name</button>
                             <div style="display:flex; gap:6px; margin-top:6px;">
                                 <button id="accountLogout" type="button" class="menuButton secondaryButton" style="padding:8px 10px; font-size:13px;">Sign out</button>
                                 <button id="accountDelete" type="button" class="menuButton secondaryButton" style="padding:8px 10px; font-size:13px; background:#b84c4c; box-shadow:0 4px 0 #873737;">Delete account</button>
                             </div>
                         </div>
-                        <div class="infoBox" style="margin-top: 10px; padding: 10px;">
+                        <div id="accountStatusBox" class="infoBox" style="margin-top: 10px; padding: 10px;">
                             <i class="material-icons" style="font-size: 16px;">info</i>
                             <span id="accountGuestMessage" style="font-size: 12px;">Guest mode: Play without an account</span>
                         </div>
@@ -547,8 +542,10 @@
     <div id="touch-controls-fullscreen"></div>
     <div id="gameUI" style="display:none">
         <div id="chatHolder" style="display:none">
+            <div id="chatRosterTitle">Players</div>
             <div id="chatRoster" style="display:none"></div>
             <input id="chatBox" placeholder="Enter Message" maxlength="30" style="opacity: 1; width: 220px; max-width: 90vw; display:block; margin:0 auto; text-align:left; padding:6px 12px;">
+            <button id="chatRosterClose" type="button">Close</button>
         </div>
         <div id="upgradeHolder"></div>
         <div id="upgradeCounter"></div>

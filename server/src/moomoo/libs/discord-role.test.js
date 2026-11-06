@@ -1,6 +1,6 @@
     import test from "node:test";
 import assert from "node:assert/strict";
-import { hasDiscordRole } from "./discord-role.js";
+import { getDiscordStaffRoles, hasDiscordRole } from "./discord-role.js";
 
 const discordId = "1566721142251589781";
 const guildId = "1566721142251589772";
@@ -17,6 +17,21 @@ test("Discord role lookup recognizes the configured role", async () => {
         json: async () => ({ roles: [roleId] })
     })));
     assert.equal(hasRole, true);
+});
+
+test("Discord staff lookup recognizes owner and administrator roles", async () => {
+    const roles = await getDiscordStaffRoles(discordId, {
+        token: "test-token",
+        guildId,
+        ownerRoleId: roleId,
+        administratorRoleId: "1566721142251589778",
+        fetch: async () => ({
+            ok: true,
+            status: 200,
+            json: async () => ({ roles: [roleId, "1566721142251589778"] })
+        })
+    });
+    assert.deepEqual(roles, { owner: true, administrator: true });
 });
 
 test("Discord role lookup rejects members without the configured role", async () => {

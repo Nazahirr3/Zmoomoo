@@ -630,7 +630,8 @@ span {
 .rightColumn {
         width: 280px;
         animation: slideInRight 0.6s ease-out;
-        height: 420px;
+        height: auto;
+        min-height: 420px;
 }
 
 @keyframes slideInLeft {
@@ -1702,11 +1703,126 @@ span {
         align-items: center;
         justify-content: center;
         text-decoration: none;
+        color: #fff !important;
+}
+
+.accountAuthButton:visited,
+.accountAuthButton:hover,
+.accountAuthButton:active {
+        color: #fff !important;
+}
+
+#accountCard {
+        position: relative;
+}
+
+#accountNotice {
+        position: absolute;
+        top: 8px;
+        left: 16px;
+        right: 16px;
+        z-index: 2;
+        box-sizing: border-box;
+        margin-bottom: 0 !important;
+        padding: 3px 8px;
+        line-height: 1.2;
+        pointer-events: none;
+}
+
+#accountCard.accountNoticeVisible #accountProfile {
+        padding-top: 32px;
+}
+
+.accountPlayerName {
+        width: 100%;
+        margin: 0 0 8px;
+        padding: 0;
+        box-sizing: border-box;
+        text-align: center;
+        color: #555;
+}
+
+.accountPlayerNameTitle {
+        display: block;
+        position: relative;
+        color: #555;
+        font-size: 12px;
+        font-weight: 600;
+}
+
+.accountNameHelp {
+        display: none;
+        width: 16px;
+        height: 16px;
+        margin-left: 3px;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        color: #777;
+        background: #fff;
+        box-shadow: 0 0 0 1px #bbb;
+        cursor: pointer;
+        font: 700 11px/16px Arial, sans-serif;
+        vertical-align: middle;
+}
+
+.accountPlayerName:hover .accountNameHelp,
+.accountNameHelp:focus {
+        display: inline-block;
+}
+
+.accountPlayerName strong {
+        display: block;
+        margin: 2px 0;
+        color: #333;
+        font-size: 16px;
+}
+
+.accountPlayerName input {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        margin: 4px 0;
+        padding: 5px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        text-align: center;
+        color: #333;
+}
+
+.accountPlayerName .menuButton {
+        display: block;
+        min-height: 32px;
+        line-height: 1.2;
+        padding: 6px 10px;
+        font-size: 13px;
+}
+
+.accountUsernameCooldown {
+        display: none;
+        margin-top: 5px;
+        color: #777;
+        line-height: 1.25;
+}
+
+.accountUsernameCooldown.visible {
+        display: block;
 }
 
 .accountSignedIn {
         justify-content: flex-start !important;
-        overflow-y: auto;
+        overflow: hidden;
+        height: auto !important;
+        min-height: 420px;
+        flex: 0 0 auto !important;
+}
+
+.rightColumn:has(.accountSignedIn) {
+        height: auto;
+}
+
+.accountSignedIn #accountProfile {
+        flex: 0 0 auto;
 }
 
 .accountSignedIn .accountIcon,
@@ -1804,6 +1920,58 @@ span {
         bottom: 200px;
         width: 100%;
         text-align: center;
+}
+
+#chatHolder.rosterOpen {
+        position: fixed;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+        width: min(360px, 92vw);
+        left: 50%;
+        bottom: auto;
+        padding: 10px;
+        box-sizing: border-box;
+        background: rgba(0, 0, 0, 0.25);
+        border-radius: 4px;
+}
+
+#chatHolder.rosterOpen #chatRoster {
+        pointer-events: all;
+}
+
+#chatRosterTitle {
+        display: none;
+        font-family: 'Hammersmith One', sans-serif;
+        font-weight: normal;
+}
+
+#chatHolder.rosterOpen #chatRosterTitle {
+        display: block;
+        margin-bottom: 8px;
+        color: #fff;
+        font-size: 32px;
+        text-align: center;
+}
+
+#chatRosterClose {
+        display: none;
+        margin: 10px auto 0;
+        padding: 8px 26px;
+        border: 0;
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.25);
+        color: #fff;
+        font: inherit;
+        font-size: 28px;
+        font-family: 'Hammersmith One', sans-serif;
+        font-weight: normal;
+        cursor: pointer;
+        pointer-events: all;
+}
+
+#chatRosterClose:hover {
+        background: rgba(50, 50, 50, 0.4);
 }
 
 #chatBox {
@@ -1970,22 +2138,66 @@ span {
         grid-auto-flow: column;
         grid-template-rows: repeat(var(--roster-rows, 10), minmax(0, auto));
         grid-auto-columns: minmax(0, 1fr);
-        gap: 2px 12px;
-        max-width: 90vw;
-        max-height: 45vh;
+        gap: 7px 28px;
+        max-width: 100%;
+        max-height: 78vh;
         overflow: auto;
-        margin: 0 auto 6px;
-        padding: 8px;
-        border-radius: 4px;
-        background: rgba(0, 0, 0, 0.32);
+        margin: 0 auto;
+        padding: 0;
+        border-radius: 0;
+        background: transparent;
         color: #fff;
         text-align: left;
         white-space: nowrap;
+        box-sizing: border-box;
 }
 
 .chatRosterEntry {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-family: 'Hammersmith One', sans-serif;
+        font-weight: normal;
+        line-height: 1.25;
         overflow: hidden;
         text-overflow: ellipsis;
+}
+
+.chatRosterLabel {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+}
+
+.chatRosterActions {
+        display: flex;
+        flex: 0 0 auto;
+        gap: 4px;
+}
+
+.chatRosterAction {
+        padding: 3px 7px;
+        border: 0;
+        border-radius: 4px;
+        color: #fff;
+        font: inherit;
+        font-size: 0.7em;
+        line-height: 1.1;
+        cursor: default;
+        opacity: 0.9;
+}
+
+.chatRosterBan {
+        background: #b84c4c;
+}
+
+.chatRosterKick {
+        background: #b84c4c;
+}
+
+.chatRosterMute {
+        background: #8d5cc2;
 }
 
 @media (prefers-reduced-motion: reduce) {

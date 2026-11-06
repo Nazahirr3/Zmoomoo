@@ -11,6 +11,8 @@ test("Discord accounts, sessions, stats, names, and mutes persist in the store",
     const store = createAccountStore(":memory:");
     try {
         const user = store.findOrCreateDiscordUser("123456789012345678");
+        const sameUser = store.findOrCreateDiscordUser("123456789012345678");
+        assert.equal(sameUser.id, user.id);
         assert.match(user.username, /^Player[a-f0-9]{6}$/);
         assert.deepEqual(store.getProfile(user.id).stats, {
             kills: 0,
@@ -34,6 +36,10 @@ test("Discord accounts, sessions, stats, names, and mutes persist in the store",
         assert.equal(store.getSession(session.token).id, user.id);
         assert.equal(store.updateUsername(user.id, "Yandel"), true);
         assert.equal(store.updateUsername(user.id, "NewName"), false);
+        assert.equal(store.findOrCreateDiscordUser(user.discord_id).username, "Yandel");
+        assert.equal(store.updateUsername(user.id, "yandel"), false);
+        assert.equal(store.getProfile(user.id).usernameChangeAvailableAt >
+            Date.now() + 13 * 24 * 60 * 60 * 1000, true);
 
         store.recordMatch(user.id, {
             kills: 4,
@@ -136,6 +142,41 @@ test("join tokens are signed, expire, and can only be used once", () => {
         } finally {
             Date.now = realNow;
         }
+    } finally {
+        store.close();
+    }
+});
+
+test("moderation bans invalidate sessions and survive account deletion", () => {
+    const store = createAccountStore(":memory:");
+    try {
+        const user = store.findOrCreateDiscordUser("123456789012345678");
+        const session = store.createSession(user.id);
+        const until = Date.now() + 60_000;
+
+        store.banUser(user.discord_id, until, "test ban");
+        assert.equal(store.getSession(session.token), null);
+        assert.equal(store.getBan(user.discord_id).reason, "test ban");
+
+        store.deleteUser(user.id);
+        assert.equal(store.getBan(user.discord_id).banned_until, until);
+
+        store.unbanUser(user.discord_id);
+        assert.equal(store.getBan(user.discord_id), null);
+    } finally {
+        store.close();
+    }
+});
+
+test("IP bans are persisted as non-reversible hashes", () => {
+    const store = createAccountStore(":memory:");
+    try {
+        const until = Date.now() + 60_000;
+        store.banIp("203.0.113.10", until, "test", "123456789012345678");
+        assert.equal(store.isIpBanned("203.0.113.10").reason, "test");
+        assert.equal(store.isIpBanned("203.0.113.11"), null);
+        store.unbanIp("203.0.113.10");
+        assert.equal(store.isIpBanned("203.0.113.10"), null);
     } finally {
         store.close();
     }

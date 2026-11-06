@@ -24,9 +24,15 @@ export class Player {
     is_bot = false;
     packet_spam = 0;
 
-    async send(type, ...data) {
-        if (!this.socket) return;
-        this.socket.send(encode([type, data]));
+    send(type, ...data) {
+        if (!this.socket || this.socket.readyState !== 1) return false;
+        try {
+            this.socket.send(encode([type, data]));
+            return true;
+        } catch (error) {
+            console.error(`[player] Failed to send packet to ${this.id}:`, error);
+            return false;
+        }
     }
 
     setSkin(id) {
@@ -47,6 +53,8 @@ export class Player {
         this.team = null;
         this.skinIndex = 0;
         this.tailIndex = 0;
+        this.skin = {};
+        this.tail = {};
         this.hitTime = 0;
         this.tails = {};
         for (var i = 0; i < accessories.length; ++i) {
@@ -90,6 +98,8 @@ export class Player {
             this.chatCountdown = 0;
             this.shameCount = 0;
             this.shameTimer = 0;
+            this.skin = {};
+            this.tail = {};
             this.sentTo = {};
             this.gathering = 0;
             this.autoGather = 0;
@@ -273,7 +283,7 @@ export class Player {
                 this.skinIndex = 45;
                 this.shameTimer -= delta;
                 if (this.shameTimer <= 0) {
-                    this.skinIndex = this.skin.id || 0;
+                    this.skinIndex = this.skin?.id || 0;
                     this.shameTimer = 0;
                     this.shameCount = 0;
                 }
@@ -425,7 +435,7 @@ export class Player {
         };
 
         this.addProjectile = function() {
-            if (this.skinIndex != 53) return;
+            if (this.skinIndex != 53 || !this.skin?.turret) return;
             var nearPlayer = null;
             var bestDist = Infinity;
             for (var i = 0; i < players.length; i++) {
@@ -530,6 +540,7 @@ export class Player {
         };
 
         this.buildItem = function(item) {
+            if (!item || !Array.isArray(this.items) || !this.items.includes(item.id)) return false;
             var tmpS = this.scale + item.scale + (item.placeOffset || 0);
             var tmpX = this.x + tmpS * mathCOS(this.dir);
             var tmpY = this.y + tmpS * mathSIN(this.dir);

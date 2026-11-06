@@ -1,10 +1,11 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createAccountStore, SESSION_LENGTH } from "./account-store.js";
 import sharedConfig from "../../../../shared/config.js";
 import nameFilter from "../../../../shared/namefilter.js";
 
 const JOIN_TOKEN_MS = 60 * 1000;
 const STATE_COOKIE = "discord_oauth_state";
+const PKCE_COOKIE = "discord_oauth_pkce";
 const SESSION_COOKIE = "zmoomoo_session";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -45,6 +46,12 @@ function accountError(response, status, message) {
         "<main style=\"font:16px sans-serif;max-width:520px;margin:12vh auto;padding:24px;text-align:center\">" +
         "<h1>Account sign-in</h1><p>" + message + "</p><a href=\"/\">Return to the game</a></main>"
     );
+}
+
+function createPkcePair() {
+    const verifier = randomBytes(32).toString("base64url");
+    const challenge = createHash("sha256").update(verifier).digest("base64url");
+    return { verifier, challenge };
 }
 
 export function createJoinTokenService(store, secret = process.env.JOIN_SECRET) {
@@ -100,7 +107,7 @@ export function createJoinTokenService(store, secret = process.env.JOIN_SECRET) 
 
         if (payload.userId !== null) {
             const user = store.getUserById(payload.userId);
-            if (!user || (user.banned_until && user.banned_until > now)) return null;
+            if (!user || (user.banned_until && user.banned_until > now) || store.getBan(user.discord_id)) return null;
         }
         return payload;
     }
@@ -122,6 +129,13 @@ export function registerAccountApi(app, options = {}) {
         return token ? store.getSession(token) : null;
     }
 
+    function isBanned(user) {
+        return Boolean(user && (
+            (user.banned_until && user.banned_until > Date.now()) ||
+            store.getBan(user.discord_id)
+        ));
+    }
+
     app.get("/api/auth/discord", (request, response) => {
         const clientId = process.env.DISCORD_CLIENT_ID;
         const redirectUri = process.env.DISCORD_REDIRECT_URI;
@@ -130,31 +144,44 @@ export function registerAccountApi(app, options = {}) {
         }
 
         const state = randomBytes(24).toString("base64url");
+        const pkce = createPkcePair();
         response.cookie(STATE_COOKIE, state, {
             ...cookieOptions(request, 10 * 60 * 1000),
             secure: true,
             httpOnly: true,
             path: "/api/auth/discord/callback"
         });
+        response.cookie(PKCE_COOKIE, pkce.verifier, {
+            ...cookieOptions(request, 10 * 60 * 1000),
+            secure: true,
+            httpOnly: true,
+            path: "/api/auth/discord/callback"
+        });
         const authorization = new URL("https://discord.com/oauth2/authorize");
+        // email is only used to require a verified Discord account
         authorization.search = new URLSearchParams({
             client_id: clientId,
             redirect_uri: redirectUri,
             response_type: "code",
-            scope: "identify",
-            state
+            scope: "identify email",
+            state,
+            code_challenge: pkce.challenge,
+            code_challenge_method: "S256"
         }).toString();
         response.redirect(authorization.toString());
     });
 
     app.get("/api/auth/discord/callback", async (request, response) => {
         const state = readCookie(request, STATE_COOKIE);
+        const verifier = readCookie(request, PKCE_COOKIE);
         const receivedState = typeof request.query.state === "string" ? request.query.state : "";
         response.clearCookie(STATE_COOKIE, { ...cookieOptions(request), path: "/api/auth/discord/callback" });
+        response.clearCookie(PKCE_COOKIE, { ...cookieOptions(request), path: "/api/auth/discord/callback" });
         const stateBytes = Buffer.from(state);
         const receivedStateBytes = Buffer.from(receivedState);
 
-        if (!state || !receivedState || stateBytes.length !== receivedStateBytes.length ||
+        if (!state || !verifier || !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) ||
+            !receivedState || stateBytes.length !== receivedStateBytes.length ||
             !timingSafeEqual(stateBytes, receivedStateBytes)) {
             return accountError(response, 400, "The sign-in request expired or could not be verified. Please try again.");
         }
@@ -171,7 +198,8 @@ export function registerAccountApi(app, options = {}) {
                     client_secret: process.env.DISCORD_CLIENT_SECRET,
                     grant_type: "authorization_code",
                     code: request.query.code,
-                    redirect_uri: process.env.DISCORD_REDIRECT_URI
+                    redirect_uri: process.env.DISCORD_REDIRECT_URI,
+                    code_verifier: verifier
                 })
             });
             if (!tokenResponse.ok) {
@@ -194,9 +222,16 @@ export function registerAccountApi(app, options = {}) {
             if (typeof discordProfile.id !== "string" || !/^\d{15,22}$/.test(discordProfile.id)) {
                 return accountError(response, 502, "Discord returned an invalid account profile.");
             }
+            if (discordProfile.verified !== true) {
+                return accountError(response, 403, "Your Discord email must be verified before signing in.");
+            }
 
+            if (store.getBan(discordProfile.id)) {
+                return accountError(response, 403, "This account cannot sign in right now.");
+            }
             const user = store.findOrCreateDiscordUser(discordProfile.id);
-            if (user.banned_until && user.banned_until > Date.now()) {
+            store.updateDiscordProfile(user.id, discordProfile.email, discordProfile.verified);
+            if (isBanned(user)) {
                 return accountError(response, 403, "This account cannot sign in right now.");
             }
             const session = store.createSession(user.id);
@@ -213,7 +248,7 @@ export function registerAccountApi(app, options = {}) {
         if (!user) {
             return response.json({ loggedIn: false });
         }
-        if (user.banned_until && user.banned_until > Date.now()) {
+        if (isBanned(user)) {
             return response.status(403).json({ error: "account_unavailable" });
         }
         response.json({ loggedIn: true, profile: store.getProfile(user.id) });
@@ -226,10 +261,22 @@ export function registerAccountApi(app, options = {}) {
         response.json({ success: true });
     });
 
+    const deleteAccount = (request, response) => {
+        if (!sameOrigin(request)) return response.status(403).json({ error: "invalid_origin" });
+        const user = currentUser(request);
+        if (!user) return response.status(401).json({ error: "login_required" });
+        // foreign keys remove the linked account data and sessions
+        store.deleteUser(user.id);
+        response.clearCookie(SESSION_COOKIE, cookieOptions(request));
+        response.json({ success: true });
+    };
+    app.delete("/api/account", deleteAccount);
+    app.post("/api/account/delete", deleteAccount);
+
     app.post("/api/join-token", joinLimit, (request, response) => {
         if (!sameOrigin(request)) return response.status(403).json({ error: "invalid_origin" });
         const user = currentUser(request);
-        if (user && user.banned_until && user.banned_until > Date.now()) {
+        if (isBanned(user)) {
             return response.status(403).json({ error: "account_unavailable" });
         }
         response.json({ token: joinTokens.create(user ? Number(user.id) : null) });
@@ -254,7 +301,11 @@ export function registerAccountApi(app, options = {}) {
                 return response.status(401).json({ error: "login_required" });
             }
             if (current.username.toLowerCase() === username.toLowerCase()) {
-                return response.json({ success: true, username: current.username });
+                return response.json({
+                    success: true,
+                    unchanged: true,
+                    username: current.username
+                });
             }
             if (!store.updateUsername(user.id, username)) {
                 return response.status(429).json({ error: "username_cooldown" });
@@ -272,6 +323,9 @@ export function registerAccountApi(app, options = {}) {
         if (!sameOrigin(request)) return response.status(403).json({ error: "invalid_origin" });
         const user = currentUser(request);
         if (!user) return response.status(401).json({ error: "login_required" });
+        if (isBanned(user)) {
+            return response.status(403).json({ error: "account_unavailable" });
+        }
         store.deleteUser(user.id);
         response.clearCookie(SESSION_COOKIE, cookieOptions(request));
         response.json({ success: true });

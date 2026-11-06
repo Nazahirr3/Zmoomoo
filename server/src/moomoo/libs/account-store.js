@@ -1,4 +1,4 @@
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, createHmac } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,12 +7,18 @@ import { DatabaseSync } from "node:sqlite";
 const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../data");
 const DEFAULT_DB_PATH = path.join(DATA_DIR, "accounts.sqlite");
 const SESSION_LENGTH = 30 * 24 * 60 * 60 * 1000;
+const USERNAME_COOLDOWN = 14 * 24 * 60 * 60 * 1000;
+const SESSION_REFRESH_WINDOW = 15 * 24 * 60 * 60 * 1000;
 
 function hashToken(token) {
     return createHash("sha256").update(token).digest("hex");
 }
 
 export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAULT_DB_PATH) {
+    if (process.env.NODE_ENV === "production" && !process.env.IP_BAN_SECRET && !process.env.JOIN_SECRET) {
+        throw new Error("IP_BAN_SECRET or JOIN_SECRET must be configured in production.");
+    }
+    const ipHashSecret = process.env.IP_BAN_SECRET || process.env.JOIN_SECRET || "development-only-ip-secret";
     if (dbPath !== ":memory:") {
         mkdirSync(path.dirname(path.resolve(dbPath)), { recursive: true });
     }
@@ -25,6 +31,8 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             discord_id TEXT NOT NULL UNIQUE,
+            email TEXT,
+            email_verified INTEGER NOT NULL DEFAULT 0,
             username TEXT NOT NULL COLLATE NOCASE UNIQUE,
             username_changed_at INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL,
@@ -32,6 +40,17 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
             banned_until INTEGER,
             ban_reason TEXT
         );
+        CREATE TABLE IF NOT EXISTS provider_identities (
+            provider TEXT NOT NULL,
+            provider_account_id TEXT NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at INTEGER NOT NULL,
+            last_login_at INTEGER NOT NULL,
+            PRIMARY KEY (provider, provider_account_id),
+            UNIQUE (provider, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS provider_identities_user_idx
+            ON provider_identities(user_id);
         CREATE TABLE IF NOT EXISTS sessions (
             token_hash TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -63,10 +82,47 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
             last_offense_at INTEGER NOT NULL DEFAULT 0,
             muted_until INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS bans (
+            discord_id TEXT PRIMARY KEY,
+            banned_until INTEGER NOT NULL,
+            reason TEXT
+        );
+        CREATE TABLE IF NOT EXISTS moderation_audit (
+            id INTEGER PRIMARY KEY,
+            executor_discord_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_discord_id TEXT NOT NULL,
+            target_type TEXT NOT NULL DEFAULT "discord",
+            target_value TEXT NOT NULL DEFAULT "",
+            details TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS banned_ips (
+            ip_hash TEXT PRIMARY KEY,
+            banned_until INTEGER NOT NULL,
+            reason TEXT NOT NULL DEFAULT "",
+            banned_by TEXT NOT NULL DEFAULT "",
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS moderation_audit_target_idx
+            ON moderation_audit(target_discord_id, created_at);
     `);
+    const auditColumns = new Set(db.prepare("PRAGMA table_info(moderation_audit)").all().map(column => column.name));
+    if (!auditColumns.has("target_type")) {
+        db.exec("ALTER TABLE moderation_audit ADD COLUMN target_type TEXT NOT NULL DEFAULT 'discord'");
+    }
+    if (!auditColumns.has("target_value")) {
+        db.exec("ALTER TABLE moderation_audit ADD COLUMN target_value TEXT NOT NULL DEFAULT ''");
+    }
     const userColumns = db.prepare("PRAGMA table_info(users)").all();
     if (!userColumns.some(column => column.name === "username_changed_at")) {
         db.exec("ALTER TABLE users ADD COLUMN username_changed_at INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!userColumns.some(column => column.name === "email")) {
+        db.exec("ALTER TABLE users ADD COLUMN email TEXT");
+    }
+    if (!userColumns.some(column => column.name === "email_verified")) {
+        db.exec("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0");
     }
     const statColumns = db.prepare("PRAGMA table_info(stats)").all();
     const existingStatColumns = new Set(statColumns.map(column => column.name));
@@ -80,6 +136,11 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
     }
 
     const findUserByDiscordId = db.prepare("SELECT * FROM users WHERE discord_id = ?");
+    const findUserByProvider = db.prepare(`
+        SELECT users.* FROM provider_identities
+        JOIN users ON users.id = provider_identities.user_id
+        WHERE provider_identities.provider = ? AND provider_identities.provider_account_id = ?
+    `);
     const findUserById = db.prepare("SELECT * FROM users WHERE id = ?");
     const findUserBySession = db.prepare(`
         SELECT users.* FROM sessions
@@ -88,12 +149,26 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
     `);
     const findStats = db.prepare("SELECT * FROM stats WHERE user_id = ?");
     const findPunishment = db.prepare("SELECT offense_count, last_offense_at, muted_until FROM chat_punishments WHERE user_id = ?");
+    const findBan = db.prepare("SELECT discord_id, banned_until, reason FROM bans WHERE discord_id = ?");
+    const findUsersByQuery = db.prepare(`
+        SELECT id, discord_id, username, created_at, last_login_at, banned_until, ban_reason
+        FROM users
+        WHERE discord_id = ? OR username LIKE ? COLLATE NOCASE
+        ORDER BY last_login_at DESC
+        LIMIT 10
+    `);
 
     function findOrCreateDiscordUser(discordId) {
         const now = Date.now();
-        let user = findUserByDiscordId.get(discordId);
+        let user = findUserByProvider.get("discord", discordId) || findUserByDiscordId.get(discordId);
         if (user) {
             db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(now, user.id);
+            db.prepare(`
+                INSERT INTO provider_identities (
+                    provider, provider_account_id, user_id, created_at, last_login_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(provider, provider_account_id) DO UPDATE SET last_login_at = excluded.last_login_at
+            `).run("discord", discordId, user.id, now, now);
             return findUserById.get(user.id);
         }
 
@@ -107,6 +182,11 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
                 const userId = Number(result.lastInsertRowid);
                 db.prepare("INSERT INTO stats (user_id) VALUES (?)").run(userId);
                 db.prepare("INSERT INTO chat_punishments (user_id) VALUES (?)").run(userId);
+                db.prepare(`
+                    INSERT INTO provider_identities (
+                        provider, provider_account_id, user_id, created_at, last_login_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                `).run("discord", discordId, userId, now, now);
                 return findUserById.get(userId);
             } catch (error) {
                 if (!String(error.message).includes("users.username")) throw error;
@@ -130,7 +210,15 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
     function getSession(token) {
         if (!token) return null;
         const now = Date.now();
-        return findUserBySession.get(hashToken(token), now) || null;
+        const session = findUserBySession.get(hashToken(token), now);
+        if (!session) return null;
+        // keep active sessions rolling without storing the raw token
+        const sessionRow = db.prepare("SELECT expires_at FROM sessions WHERE token_hash = ?").get(hashToken(token));
+        if (sessionRow && Number(sessionRow.expires_at) - now <= SESSION_REFRESH_WINDOW) {
+            db.prepare("UPDATE sessions SET expires_at = ? WHERE token_hash = ?")
+                .run(now + SESSION_LENGTH, hashToken(token));
+        }
+        return session;
     }
 
     function deleteSession(token) {
@@ -141,12 +229,21 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
         db.prepare("DELETE FROM users WHERE id = ?").run(userId);
     }
 
+    function invalidateAllSessions(userId) {
+        db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+    }
+
+    function updateDiscordProfile(userId, email, emailVerified) {
+        db.prepare("UPDATE users SET email = ?, email_verified = ? WHERE id = ?")
+            .run(typeof email === "string" ? email.slice(0, 320) : null, emailVerified ? 1 : 0, userId);
+    }
+
     function updateUsername(userId, username) {
         const now = Date.now();
         return db.prepare(`
             UPDATE users SET username = ?, username_changed_at = ?
             WHERE id = ? AND (username_changed_at = 0 OR username_changed_at <= ?)
-        `).run(username, now, userId, now - 24 * 60 * 60 * 1000).changes > 0;
+        `).run(username, now, userId, now - USERNAME_COOLDOWN).changes > 0;
     }
 
     function getProfile(userId) {
@@ -156,6 +253,8 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
         return {
             id: Number(user.id),
             username: user.username,
+            usernameChangedAt: Number(user.username_changed_at) || 0,
+            usernameChangeAvailableAt: (Number(user.username_changed_at) || 0) + USERNAME_COOLDOWN,
             createdAt: Number(user.created_at),
             stats: stats ? Object.fromEntries(
                 Object.entries(stats).filter(([key]) => key !== "user_id")
@@ -169,6 +268,113 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
 
     function getUserById(userId) {
         return findUserById.get(userId) || null;
+    }
+
+    function getBan(discordId) {
+        if (typeof discordId !== "string") return null;
+        const ban = findBan.get(discordId);
+        return ban && Number(ban.banned_until) > Date.now() ? { ...ban } : null;
+    }
+
+    function hashIp(address) {
+        // keep raw player ips out of the database
+        return createHmac("sha256", ipHashSecret).update(String(address)).digest("hex");
+    }
+
+    function banIp(address, bannedUntil, reason = "", executorDiscordId = "") {
+        const until = Math.max(0, Math.floor(Number(bannedUntil) || 0));
+        db.prepare(`
+            INSERT INTO banned_ips (ip_hash, banned_until, reason, banned_by, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(ip_hash) DO UPDATE SET
+                banned_until = excluded.banned_until,
+                reason = excluded.reason,
+                banned_by = excluded.banned_by
+        `).run(hashIp(address), until, String(reason).slice(0, 500), String(executorDiscordId), Date.now());
+    }
+
+    function isIpBanned(address) {
+        const row = db.prepare("SELECT banned_until, reason FROM banned_ips WHERE ip_hash = ?").get(hashIp(address));
+        if (!row) return null;
+        if (Number(row.banned_until) > Date.now()) return { ...row };
+        db.prepare("DELETE FROM banned_ips WHERE ip_hash = ?").run(hashIp(address));
+        return null;
+    }
+
+    function unbanIp(address) {
+        db.prepare("DELETE FROM banned_ips WHERE ip_hash = ?").run(hashIp(address));
+    }
+
+    function saveBan(discordId, bannedUntil, reason = "") {
+        if (typeof discordId !== "string" || !/^\d{15,22}$/.test(discordId)) {
+            throw new TypeError("Invalid Discord id");
+        }
+        db.prepare(`
+            INSERT INTO bans (discord_id, banned_until, reason)
+            VALUES (?, ?, ?)
+            ON CONFLICT(discord_id) DO UPDATE SET
+                banned_until = excluded.banned_until,
+                reason = excluded.reason
+        `).run(discordId, Math.max(0, Math.floor(Number(bannedUntil) || 0)), String(reason));
+    }
+
+    function findModerationUsers(query) {
+        const value = typeof query === "string" ? query.trim().slice(0, 64) : "";
+        if (!value) return [];
+        return findUsersByQuery.all(value, `%${value}%`).map(user => ({ ...user }));
+    }
+
+    function banUser(discordId, bannedUntil, reason = "") {
+        if (typeof discordId !== "string" || !/^\d{15,22}$/.test(discordId)) {
+            throw new TypeError("Invalid Discord id");
+        }
+        const until = Math.max(0, Math.floor(Number(bannedUntil) || 0));
+        const normalizedReason = String(reason).trim().slice(0, 500);
+        saveBan(discordId, until, normalizedReason);
+        const user = findUserByDiscordId.get(discordId);
+        if (user) {
+            db.prepare(`
+                UPDATE users SET banned_until = ?, ban_reason = ?
+                WHERE discord_id = ?
+            `).run(until, normalizedReason, discordId);
+            db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id);
+        }
+        return user ? { ...findUserByDiscordId.get(discordId) } : null;
+    }
+
+    function unbanUser(discordId) {
+        if (typeof discordId !== "string" || !/^\d{15,22}$/.test(discordId)) {
+            throw new TypeError("Invalid Discord id");
+        }
+        saveBan(discordId, 0, "");
+        db.prepare(`
+            UPDATE users SET banned_until = NULL, ban_reason = NULL
+            WHERE discord_id = ?
+        `).run(discordId);
+        return findUserByDiscordId.get(discordId) || null;
+    }
+
+    function writeModerationAudit(executorDiscordId, action, targetDiscordId, details = {}, targetType = "discord", targetValue = targetDiscordId) {
+        if (![executorDiscordId, targetDiscordId].every(value =>
+            typeof value === "string" && /^\d{15,22}$/.test(value))) {
+            throw new TypeError("Invalid Discord id");
+        }
+        if (!["discord", "ip"].includes(targetType) || typeof targetValue !== "string" || targetValue.length > 128) {
+            throw new TypeError("Invalid moderation target");
+        }
+        db.prepare(`
+            INSERT INTO moderation_audit (
+                executor_discord_id, action, target_discord_id, target_type, target_value, details, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            executorDiscordId,
+            String(action).slice(0, 64),
+            targetDiscordId,
+            targetType,
+            targetValue,
+            JSON.stringify(details).slice(0, 2000),
+            Date.now()
+        );
     }
 
     function recordMatch(userId, matchStats, seconds, died) {
@@ -239,15 +445,27 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
         createSession,
         deleteSession,
         deleteUser,
+        invalidateAllSessions,
+        updateDiscordProfile,
         findOrCreateDiscordUser,
         getProfile,
+        getBan,
+        banIp,
+        isIpBanned,
+        hashIpForAudit: hashIp,
+        unbanIp,
+        findModerationUsers,
         getPunishment,
         getSession,
         getUserById,
         recordMatch,
+        saveBan,
+        banUser,
+        unbanUser,
+        writeModerationAudit,
         savePunishment,
         updateUsername
     };
 }
 
-export { SESSION_LENGTH };
+export { SESSION_LENGTH, USERNAME_COOLDOWN };

@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { createHmac } from "node:crypto";
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 const MIN_HEARTBEAT_INTERVAL_MS = 1000;
@@ -71,6 +72,78 @@ const COMMANDS = [
     {
         name: "update",
         description: "Pull the latest GitHub changes and restart the game server"
+    },
+    {
+        name: "ban",
+        description: "Ban a Zmoomoo account by Discord ID",
+        type: 1,
+        options: [
+            {
+                name: "discord_id",
+                description: "The account's Discord user ID",
+                type: 3,
+                required: true,
+                min_length: 15,
+                max_length: 22
+            },
+            {
+                name: "minutes",
+                description: "Ban duration in minutes (0 means permanent)",
+                type: 4,
+                required: true,
+                min_value: 0,
+                max_value: 525600
+            },
+            {
+                name: "reason",
+                description: "Reason for the ban",
+                type: 3,
+                required: false,
+                max_length: 500
+            }
+        ]
+    },
+    {
+        name: "banip",
+        description: "Ban an IP address",
+        type: 1,
+        options: [
+            { name: "ip", description: "The IP address", type: 3, required: true },
+            { name: "minutes", description: "Duration in minutes (0 means permanent)", type: 4, required: true, min_value: 0, max_value: 525600 },
+            { name: "reason", description: "Reason for the ban", type: 3, required: false, max_length: 500 }
+        ]
+    },
+    {
+        name: "unbanip",
+        description: "Remove an IP address ban",
+        type: 1,
+        options: [{ name: "ip", description: "The IP address", type: 3, required: true }]
+    },
+    {
+        name: "unban",
+        description: "Remove a Zmoomoo account ban",
+        type: 1,
+        options: [{
+            name: "discord_id",
+            description: "The account's Discord user ID",
+            type: 3,
+            required: true,
+            min_length: 15,
+            max_length: 22
+        }]
+    },
+    {
+        name: "lookup",
+        description: "Look up Zmoomoo accounts by Discord ID or username",
+        type: 1,
+        options: [{
+            name: "query",
+            description: "Discord user ID or username",
+            type: 3,
+            required: true,
+            min_length: 1,
+            max_length: 64
+        }]
     }
 ];
 
@@ -314,6 +387,165 @@ async function updateGameServer(interaction, ownerId, update) {
     }
 }
 
+function moderatorRoleIds() {
+    return String(process.env.DISCORD_MODERATOR_ROLE_IDS || "")
+        .split(",")
+        .map(roleId => roleId.trim())
+        .filter(roleId => /^\d{15,22}$/.test(roleId));
+}
+
+const PERMISSION_MATRIX = Object.freeze({
+    moderation: "moderation"
+});
+
+function isModerator(interaction) {
+    const roles = Array.isArray(interaction.member?.roles) ? interaction.member.roles : [];
+    const configuredRoles = moderatorRoleIds();
+    const permissions = BigInt(interaction.member?.permissions || "0");
+    const isDiscordAdministrator = (permissions & 8n) !== 0n;
+    return Boolean(interaction.guild_id && (isDiscordAdministrator ||
+        configuredRoles.some(roleId => roles.includes(roleId))));
+}
+
+function getOption(interaction, name) {
+    return interaction.data?.options?.find(option => option.name === name)?.value;
+}
+
+function createPrivateAdminClient(options = {}) {
+    const baseUrl = options.baseUrl || `http://127.0.0.1:${process.env.PORT || 3000}`;
+    const apiKey = options.apiKey || process.env.ADMIN_API_KEY;
+    if (typeof apiKey !== "string" || apiKey.length < 32) return null;
+
+    return async function request(path, body, executorId) {
+        // sign the exact request so the api can verify who ran it
+        const timestamp = String(Date.now());
+        const payload = `${timestamp}.${executorId}.${path}.${JSON.stringify(body || {})}`;
+        const signature = createHmac("sha256", apiKey).update(payload).digest("base64url");
+        const response = await fetch(new URL(path, baseUrl), {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                "zmoomoo-api-key": apiKey,
+                "x-zmoomoo-executor": executorId,
+                "x-zmoomoo-timestamp": timestamp,
+                "x-zmoomoo-signature": signature
+            },
+            body: JSON.stringify(body || {})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Private admin API failed (${response.status})`);
+        return result;
+    };
+}
+
+function validateDiscordId(value) {
+    return typeof value === "string" && /^\d{15,22}$/.test(value);
+}
+
+function requireModerator(interaction) {
+    if (!isAllowed(interaction, PERMISSION_MATRIX.moderation)) {
+        return replyToInteraction(interaction, "You need a configured moderator role to use this command.");
+    }
+
+    function isAllowed(interaction, permission) {
+        if (permission !== PERMISSION_MATRIX.moderation) return false;
+        return isModerator(interaction);
+    }
+    return null;
+}
+
+async function banAccount(interaction, moderation) {
+    const denied = requireModerator(interaction);
+    if (denied) return denied;
+    const discordId = getOption(interaction, "discord_id");
+    const minutes = getOption(interaction, "minutes");
+    const reason = getOption(interaction, "reason") || "No reason provided";
+    if (!validateDiscordId(discordId) || !Number.isInteger(minutes) ||
+        minutes < 0 || minutes > 525600) {
+        return replyToInteraction(interaction, "Provide a valid Discord ID and duration.");
+    }
+    if (!moderation?.ban) {
+        return replyToInteraction(interaction, "Moderation is not available on this server.");
+    }
+    const executorId = interaction.member?.user?.id || interaction.user?.id;
+    const until = minutes === 0 ? Number.MAX_SAFE_INTEGER : Date.now() + minutes * 60 * 1000;
+    const result = await moderation.ban(discordId, until, reason, executorId);
+    if (result?.disconnected) {
+        return replyToInteraction(interaction, `Account ${discordId} banned and disconnected.`);
+    }
+    return replyToInteraction(interaction, `Account ${discordId} banned.`);
+}
+
+async function unbanAccount(interaction, moderation) {
+    const denied = requireModerator(interaction);
+    if (denied) return denied;
+    const discordId = getOption(interaction, "discord_id");
+    if (!validateDiscordId(discordId)) {
+        return replyToInteraction(interaction, "Provide a valid Discord ID.");
+    }
+
+    if (!moderation?.unban) {
+        return replyToInteraction(interaction, "Moderation is not available on this server.");
+    }
+    const executorId = interaction.member?.user?.id || interaction.user?.id;
+    await moderation.unban(discordId, executorId);
+    return replyToInteraction(interaction, `Account ${discordId} unbanned.`);
+}
+
+function validIp(value) {
+    return typeof value === "string" && value.length >= 3 && value.length <= 45 &&
+        /^[0-9a-fA-F:.]+$/.test(value);
+}
+
+async function banIp(interaction, moderation) {
+    const denied = requireModerator(interaction);
+    if (denied) return denied;
+    const ip = getOption(interaction, "ip");
+    const minutes = getOption(interaction, "minutes");
+    const reason = getOption(interaction, "reason") || "No reason provided";
+    if (!validIp(ip) || !Number.isInteger(minutes) || minutes < 0 || minutes > 525600) {
+        return replyToInteraction(interaction, "Provide a valid IP and duration.");
+    }
+    if (typeof moderation?.banIp !== "function") {
+        return replyToInteraction(interaction, "IP moderation is not available on this server.");
+    }
+    const until = minutes === 0 ? Number.MAX_SAFE_INTEGER : Date.now() + minutes * 60 * 1000;
+    await moderation.banIp(ip, until, reason, interaction.member?.user?.id || interaction.user?.id);
+    return replyToInteraction(interaction, `IP ${ip} banned.`);
+}
+
+async function unbanIp(interaction, moderation) {
+    const denied = requireModerator(interaction);
+    if (denied) return denied;
+    const ip = getOption(interaction, "ip");
+    if (!validIp(ip) || typeof moderation?.unbanIp !== "function") {
+        return replyToInteraction(interaction, "Provide a valid IP.");
+    }
+    await moderation.unbanIp(ip, interaction.member?.user?.id || interaction.user?.id);
+    return replyToInteraction(interaction, `IP ${ip} unbanned.`);
+}
+
+async function lookupAccounts(interaction, moderation) {
+    const denied = requireModerator(interaction);
+    if (denied) return denied;
+    const query = getOption(interaction, "query");
+    if (typeof query !== "string" || !query.trim() || query.length > 64) {
+        return replyToInteraction(interaction, "Provide a Discord ID or username.");
+    }
+    if (!moderation?.lookup) {
+        return replyToInteraction(interaction, "Moderation is not available on this server.");
+    }
+    const executorId = interaction.member?.user?.id || interaction.user?.id;
+    const users = await moderation.lookup(query, executorId);
+    if (!users.length) return replyToInteraction(interaction, "No matching accounts found.");
+    const lines = users.map(user => {
+        const status = user.banned_until > Date.now()
+            ? "banned" : "active";
+        return `${user.username} — account ${user.id}, Discord ${user.discord_id} (${status})`;
+    });
+    return replyToInteraction(interaction, lines.join("\n"));
+}
+
 export function startDiscordBot(options = {}) {
     const token = process.env.DISCORD_BOT_TOKEN;
     if (!token) {
@@ -331,6 +563,24 @@ export function startDiscordBot(options = {}) {
     const announce = options.announce;
     const restart = options.restart;
     const update = options.update;
+    const privateRequest = createPrivateAdminClient(options.adminApi);
+    const moderation = privateRequest ? {
+        ban: (discordId, bannedUntil, reason, executorId) =>
+            privateRequest("/api/private/account/ban", { discordId, bannedUntil, reason }, executorId),
+        unban: (discordId, executorId) =>
+            privateRequest("/api/private/account/unban", { discordId }, executorId),
+        lookup: async (query, executorId) => {
+            const result = await privateRequest("/api/private/account/lookup", { query }, executorId);
+            return result.users;
+        },
+        banIp: (address, bannedUntil, reason, executorId) =>
+            privateRequest("/api/private/ip/ban", { address, bannedUntil, reason }, executorId),
+        unbanIp: (address, executorId) =>
+            privateRequest("/api/private/ip/unban", { address }, executorId)
+    } : null;
+    if (!privateRequest) {
+        console.error("[discord] Moderation commands disabled: ADMIN_API_KEY is not configured.");
+    }
 
     function connect() {
         socket = new WebSocket(GATEWAY_URL);
@@ -416,6 +666,21 @@ export function startDiscordBot(options = {}) {
                 } else if (packet.d.data?.name === "update") {
                     updateGameServer(packet.d, ownerId, update)
                         .catch(error => console.error("[discord] Could not run /update:", error));
+                } else if (packet.d.data?.name === "ban") {
+                    banAccount(packet.d, moderation)
+                        .catch(error => console.error("[discord] Could not run /ban:", error));
+                } else if (packet.d.data?.name === "unban") {
+                    unbanAccount(packet.d, moderation)
+                        .catch(error => console.error("[discord] Could not run /unban:", error));
+                } else if (packet.d.data?.name === "lookup") {
+                    lookupAccounts(packet.d, moderation)
+                        .catch(error => console.error("[discord] Could not run /lookup:", error));
+                } else if (packet.d.data?.name === "banip") {
+                    banIp(packet.d, moderation)
+                        .catch(error => console.error("[discord] Could not run /banip:", error));
+                } else if (packet.d.data?.name === "unbanip") {
+                    unbanIp(packet.d, moderation)
+                        .catch(error => console.error("[discord] Could not run /unbanip:", error));
                 }
             }
         });

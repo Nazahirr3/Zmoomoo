@@ -5,17 +5,19 @@ import fs from "node:fs";
 import { WebSocketServer } from "ws";
 import { createServer } from "node:http";
 import { rateLimit } from "express-rate-limit";
-import { decode, encode } from "msgpack-lite";
+import { encode } from "msgpack-lite";
 import { Game } from "./moomoo/server.js";
 import { Player } from "./moomoo/modules/player.js";
 import { items } from "./moomoo/modules/items.js";
 import { UTILS } from "./moomoo/libs/utils.js";
 import { hats, accessories } from "./moomoo/modules/store.js";
 import { filter_chat, getMuteDuration, formatMuteDuration, handleDevCommand, getChatViolation, isSevereAcrossMessages, normalizeMessage, resetMuteStateIfNeeded } from "./moomoo/libs/filterchat.js";
+import { parseClientPacket } from "./network/packetUtils.js";
 import { createAccountStore } from "./moomoo/libs/account-store.js";
 import { createJoinTokenService, registerAccountApi } from "./moomoo/libs/account-api.js";
-import { hasDiscordRole } from "./moomoo/libs/discord-role.js";
+import { getDiscordStaffRoles } from "./moomoo/libs/discord-role.js";
 import { startDiscordBot } from "./moomoo/libs/discord-bot.js";
+import { registerPrivateAdminApi } from "./moomoo/libs/private-admin-api.js";
 import { config } from "./moomoo/config.js";
 import { ConnectionLimit } from "./moomoo/libs/limit.js";
 import { fileURLToPath } from "node:url";
@@ -35,7 +37,8 @@ const colimit = new ConnectionLimit(4);
 
 const server = createServer(app);
 const wss = new WebSocketServer({
-    server
+    server,
+    maxPayload: Number(process.env.MAX_PACKET_BYTES) || 2048
 });
 
 
@@ -54,10 +57,22 @@ const INDEX = path.join(CLIENT_DIST_DIR, "html/play.html");
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
 const SERVER_START_TIME = Date.now();
-const CLAN_CREATE_COOLDOWN = 10 * 60 * 1000;
+const CLAN_CREATE_COOLDOWN = 20 * 1000;
 const CHAT_MUTE_STORE = new Map();
 const JOIN_ATTEMPTS = new Map();
 const accountStore = createAccountStore();
+// keep bot moderation behind the signed private api
+registerPrivateAdminApi(app, {
+    store: accountStore,
+    disconnectAccount(discordId) {
+        for (const player of game.players) {
+            const user = player.accountId ? accountStore.getUserById(player.accountId) : null;
+            if (user?.discord_id === discordId && player.socket) {
+                player.socket.close(4003, "Account banned");
+            }
+        }
+    }
+});
 const accountApi = registerAccountApi(app, {
     store: accountStore,
     joinTokens: createJoinTokenService(accountStore),
@@ -88,6 +103,15 @@ const SERVER_METADATA = {
 };
 
 const POINTS_RESOURCE_INDEX = config.resourceTypes ? config.resourceTypes.indexOf("points") : -1;
+
+process.on("uncaughtException", error => {
+    console.error("[server] Uncaught exception:", error);
+    process.exit(1);
+});
+process.on("unhandledRejection", error => {
+    console.error("[server] Unhandled rejection:", error);
+    process.exit(1);
+});
 
 function isLocalAddress(address) {
     const value = String(address || "").toLowerCase();
@@ -184,11 +208,11 @@ function recordAccountMatch(player, died) {
     player.accountMatchRecorded = true;
 }
 
-async function checkDiscordOwnerRole(player) {
-    if (!player.accountId) return false;
+async function checkDiscordStaffRoles(player) {
+    if (!player.accountId) return { owner: false, administrator: false };
     const user = accountStore.getUserById(player.accountId);
-    if (!user || typeof user.discord_id !== "string") return false;
-    return hasDiscordRole(user.discord_id);
+    if (!user || typeof user.discord_id !== "string") return { owner: false, administrator: false };
+    return getDiscordStaffRoles(user.discord_id);
 }
 
 if (!fs.existsSync(INDEX)) {
@@ -204,17 +228,23 @@ setInterval(() => {
     const roster = game.players.map(player => [
         player.sid,
         player.accountId || null,
-        Boolean(player.hasDiscordOwnerRole)
+        player.hasDiscordOwnerRole ? "owner" :
+            player.hasDiscordAdministratorRole ? "administrator" : null,
+        Boolean(player.staffHidden)
     ]);
     for (const player of game.players) {
-        if (player.hasDiscordOwnerRole) player.send("oid", roster);
+        if (player.hasDiscordOwnerRole || player.hasDiscordAdministratorRole) player.send("oid", roster);
     }
 }, 1000);
 
-function updateOwnerRole(player, hasRole) {
-    player.hasDiscordOwnerRole = Boolean(hasRole);
-    player.send("own", player.hasDiscordOwnerRole);
-    if (!player.hasDiscordOwnerRole) {
+function updateStaffRoles(player, roles) {
+    player.hasDiscordOwnerRole = Boolean(roles && roles.owner);
+    player.hasDiscordAdministratorRole = Boolean(roles && roles.administrator);
+    player.send("own", {
+        owner: player.hasDiscordOwnerRole,
+        administrator: player.hasDiscordAdministratorRole
+    });
+    if (!player.hasDiscordOwnerRole && !player.hasDiscordAdministratorRole) {
         player.send("oid", []);
         if (player.ownerShown) {
             player.ownerShown = false;
@@ -440,6 +470,10 @@ function restartGameServer(seconds = 5) {
 }
 
 startDiscordBot({
+    adminApi: {
+        baseUrl: process.env.ADMIN_API_URL || `http://127.0.0.1:${PORT}`,
+        apiKey: process.env.ADMIN_API_KEY
+    },
     announce: announcement => {
         const sentAt = Date.now();
         activeGlobalAnnouncement = {
@@ -450,7 +484,52 @@ startDiscordBot({
         game.server.broadcast("gm", activeGlobalAnnouncement);
     },
     restart: restartGameServer,
-    update: updateGameServer
+    update: updateGameServer,
+    moderation: {
+        ban(discordId, bannedUntil, reason, executorId) {
+            const user = accountStore.banUser(discordId, bannedUntil, reason);
+            accountStore.writeModerationAudit(executorId, "ban", discordId, {
+                bannedUntil,
+                reason,
+                accountId: user?.id || null
+            });
+            let disconnected = false;
+            for (const player of game.players) {
+                const playerUser = player.accountId ? accountStore.getUserById(player.accountId) : null;
+                if (!playerUser || playerUser.discord_id !== discordId || !player.socket) continue;
+                disconnected = true;
+                player.socket.close(4003, "Account banned");
+            }
+            return { user, disconnected };
+        },
+        unban(discordId, executorId) {
+            const user = accountStore.unbanUser(discordId);
+            accountStore.writeModerationAudit(executorId, "unban", discordId, {
+                accountId: user?.id || null
+            });
+            return user;
+        },
+        banIp(address, bannedUntil, reason, executorId) {
+            accountStore.banIp(address, bannedUntil, reason, executorId);
+            return accountStore.writeModerationAudit(executorId, "ban_ip", executorId, {
+                bannedUntil,
+                reason,
+                addressHash: accountStore.hashIpForAudit(address)
+            }, "ip", accountStore.hashIpForAudit(address));
+        },
+        unbanIp(address, executorId) {
+            accountStore.unbanIp(address);
+            return accountStore.writeModerationAudit(executorId, "unban_ip", executorId, {
+                addressHash: accountStore.hashIpForAudit(address)
+            }, "ip", accountStore.hashIpForAudit(address));
+        },
+        lookup(query) {
+            return accountStore.findModerationUsers(query);
+        },
+        isBanned(discordId) {
+            return Boolean(accountStore.getBan(discordId));
+        }
+    }
 });
 
 app.get("/", publicRateLimit, (req, res) => {
@@ -492,14 +571,15 @@ app.use(e.static(CLIENT_DIST_DIR));
 
 wss.on("connection", async (socket, req) => {
 
-    if (
-        game.players.length > config.maxPlayersHard
-    ) {
+    if (game.players.length >= config.maxPlayersHard) {
         return void socket.close();
     }
 
     const addr = req.socket.remoteAddress;
     const localConnection = isLocalAddress(req.socket.remoteAddress);
+    if (accountStore.isIpBanned(addr)) {
+        return void socket.close(4003, "IP banned");
+    }
 
     if (
         colimit.check(addr)
@@ -509,7 +589,10 @@ wss.on("connection", async (socket, req) => {
 
     colimit.up(addr);
 
-    const player = game.addPlayer(socket);
+    let player = game.addPlayer(socket, false);
+    let handshakeTimer = setTimeout(() => {
+        if (!player.joinTokenVerified && socket.readyState === 1) socket.close(4003, "join token timeout");
+    }, 5000);
     player.isMuted = function() {
         return Boolean(this.muteUntil && this.muteUntil > Date.now());
     };
@@ -525,6 +608,7 @@ wss.on("connection", async (socket, req) => {
     player.accountId = null;
     player.remoteAddress = addr;
     player.ownerCommandCooldownUntil = 0;
+    player.staffHidden = false;
     player.accountMatchStartedAt = 0;
     player.accountMatchRecorded = false;
     const killPlayer = player.kill.bind(player);
@@ -540,10 +624,16 @@ wss.on("connection", async (socket, req) => {
         timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
     });
 
-    const emit = async (type, ...data) => {
+    const emit = (type, ...data) => {
 
-        if (!player.socket) return;
-        socket.send(encode([type, data]));
+        if (!player.socket || socket.readyState !== 1) return false;
+        try {
+            socket.send(encode([type, data]));
+            return true;
+        } catch (error) {
+            console.error(`[server] Failed to send packet to ${player.id}:`, error);
+            return false;
+        }
     };
 
     const handleInvalidPacket = reason => {
@@ -578,33 +668,7 @@ wss.on("connection", async (socket, req) => {
                 return;
             }
 
-            const decoded = decode(new Uint8Array(msg));
-
-            if (!Array.isArray(decoded) || decoded.length < 2) {
-                handleInvalidPacket("malformed packet structure");
-                return;
-            }
-
-            const rawType = decoded[0];
-            const payload = decoded[1];
-
-            const t = typeof rawType === "string"
-                ? rawType
-                : (typeof rawType === "number" || typeof rawType === "bigint")
-                    ? rawType.toString()
-                    : null;
-
-            if (!t || t.length === 0 || t.length > 3) {
-                handleInvalidPacket("invalid packet identifier");
-                return;
-            }
-
-            if (!Array.isArray(payload)) {
-                handleInvalidPacket("packet payload is not an array");
-                return;
-            }
-
-            const data = payload;
+            const { type: t, payload: data } = parseClientPacket(msg);
 
             if (!player.joinTokenVerified) {
                 if (t !== "A" || typeof data[0] !== "string") {
@@ -626,11 +690,11 @@ wss.on("connection", async (socket, req) => {
                     }
                     player.accountId = Number(user.id);
                     player.accountUsername = user.username;
-                    checkDiscordOwnerRole(player)
-                        .then(hasRole => {
-                            if (player.socket) updateOwnerRole(player, hasRole);
+                    checkDiscordStaffRoles(player)
+                        .then(roles => {
+                            if (player.socket) updateStaffRoles(player, roles);
                         })
-                        .catch(error => console.error("[discord] Owner role check failed:", error.message));
+                        .catch(error => console.error("[discord] Staff role check failed:", error.message));
                     const punishment = accountStore.getPunishment(player.accountId);
                     const now = Date.now();
                     const resetAfter = (Number(config.chatMuteResetDays) || 3) * 24 * 60 * 60 * 1000;
@@ -658,7 +722,12 @@ wss.on("connection", async (socket, req) => {
                     });
                 }
 
+                if (!game.activatePlayer(player)) {
+                    handleInvalidPacket("server is full");
+                    return;
+                }
                 player.joinTokenVerified = true;
+                clearTimeout(handshakeTimer);
                 player.send("os", game.players
                     .filter(target => target.ownerShown && target.socket?.readyState === 1)
                     .map(target => target.sid));
@@ -820,7 +889,7 @@ wss.on("connection", async (socket, req) => {
 
                     const item = items.list[data[0]];
 
-                    if (!item) {
+                    if (!item || !Array.isArray(player.items) || !player.items.includes(data[0])) {
                         break;
                     }
 
@@ -979,38 +1048,32 @@ wss.on("connection", async (socket, req) => {
                         if (player.ownerCommandCooldownUntil > Date.now()) break;
                         player.ownerCommandCooldownUntil = Date.now() + 1000;
 
-                        if (command === "owner" && !player.accountId) {
-                            player.send("w", "Sign in with Discord before using /owner. Disconnecting.");
-                            setTimeout(() => socket.close(4003, "Discord owner role required"), 1000);
-                            break;
-                        }
-
                         if (!player.accountId) {
-                            player.send("w", "Sign in with Discord to use owner tools.");
                             break;
                         }
 
                         try {
-                            const hasRole = await checkDiscordOwnerRole(player);
-                            updateOwnerRole(player, hasRole);
-                            if (!hasRole) {
-                                if (command === "owner") {
-                                    player.send("w", "Your Discord account doesn't have the owner role. Disconnecting.");
-                                    setTimeout(() => socket.close(4003, "Discord owner role required"), 1000);
-                                } else {
-                                    player.send("w", "Owner role required.");
-                                }
+                            const roles = await checkDiscordStaffRoles(player);
+                            updateStaffRoles(player, roles);
+                            if (command === "owner" && !roles.owner) {
+                                break;
+                            }
+                            if (!roles.owner && !roles.administrator) {
                                 break;
                             }
 
                             if (command === "owner") {
-                                player.send("w", "Discord owner role verified. Your name is orange, and player account IDs are shown below names.");
+                                player.send("w", roles.administrator && !roles.owner
+                                    ? "Discord administrator role verified. Your name is red, and player account IDs are shown below names."
+                                    : "Discord owner role verified. Your name is orange, and player account IDs are shown below names.");
                             } else if (command === "show" || command === "hide") {
                                 player.ownerShown = command === "show";
+                                player.staffHidden = command === "hide";
                                 game.server.broadcast("os", player.sid, player.ownerShown);
+                                const staffLabel = roles.administrator && !roles.owner ? "administrator" : "owner";
                                 player.send("w", player.ownerShown
-                                    ? "You are now shown as an owner to other players."
-                                    : "You are hidden as an owner from other players.");
+                                    ? `You are now shown as an ${staffLabel} to other players.`
+                                    : `You are hidden as an ${staffLabel} from other players.`);
                             } else if (command === "players") {
                                 const roster = game.players
                                     .filter(target => target.joinTokenVerified &&
@@ -1075,7 +1138,7 @@ wss.on("connection", async (socket, req) => {
                                 }
                             }
                         } catch (error) {
-                            console.error("[discord] Owner role check failed:", error.message);
+                            console.error("[discord] Staff role check failed:", error.message);
                             player.send("w", "Could not verify your Discord role. Try again later.");
                         }
                         break;
@@ -1297,6 +1360,9 @@ wss.on("connection", async (socket, req) => {
 
                     if (typeof joinDecision !== "undefined") {
 
+                        if (!player.is_owner || !Number.isSafeInteger(targetSid) || typeof joinDecision !== "boolean") {
+                            break;
+                        }
                         player.clan_cooldown = 200;
 
                         game.clan_manager.confirm_join(player.team, targetSid, joinDecision);
@@ -1308,6 +1374,7 @@ wss.on("connection", async (socket, req) => {
 
                     player.clan_cooldown = 200;
 
+                    if (!Number.isSafeInteger(targetSid)) break;
                     game.clan_manager.kick(player.team, targetSid);
                     break;
 
@@ -1348,6 +1415,7 @@ wss.on("connection", async (socket, req) => {
 
     socket.on("close", reason => {
 
+        clearTimeout(handshakeTimer);
         colimit.down(addr);
         recordAccountMatch(player, false);
         if (player.ownerShown) {
@@ -1365,8 +1433,12 @@ wss.on("connection", async (socket, req) => {
 
         }
 
-        game.removePlayer(player.id);
+        if (player.joinTokenVerified) game.removePlayer(player.id);
 
+    });
+
+    socket.on("error", error => {
+        console.error(`[server] WebSocket error for ${addr}:`, error);
     });
 
 });

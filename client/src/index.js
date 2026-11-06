@@ -250,6 +250,7 @@ var players = [];
 var ownerAccountIds = Object.create(null);
 var shownOwnerIds = Object.create(null);
 var hasOwnerTools = false;
+var currentStaffRole = null;
 var alliances = [];
 var gameObjects = [];
 var projectiles = [];
@@ -414,8 +415,10 @@ var leaderboardButton = document.getElementById("leaderboardButton");
 var leaderboardSide = 0;
 var leaderboardEntries = [];
 var chatRoster = document.getElementById("chatRoster");
+var chatRosterClose = document.getElementById("chatRosterClose");
 var chatRosterLongestText = 0;
 var chatRosterColumns = 1;
+var chatRosterColumnLongestText = [];
 var nameInput = document.getElementById("nameInput");
 var itemInfoHolder = document.getElementById("itemInfoHolder");
 var ageText = document.getElementById("ageText");
@@ -453,9 +456,15 @@ function setInitData(data) {
 }
 
 function updateOwnerStatus(enabled) {
-    hasOwnerTools = Boolean(enabled);
+    hasOwnerTools = typeof enabled === "object"
+        ? Boolean(enabled && (enabled.owner || enabled.administrator))
+        : Boolean(enabled);
+    currentStaffRole = typeof enabled === "object"
+        ? (enabled.owner ? "owner" : enabled.administrator ? "administrator" : null)
+        : (enabled ? "owner" : null);
     if (!hasOwnerTools) {
         ownerAccountIds = Object.create(null);
+        currentStaffRole = null;
     }
     updateChatMuteUI();
 }
@@ -468,7 +477,9 @@ function updateOwnerRoster(data) {
         if (Array.isArray(entry) && Number.isSafeInteger(entry[0])) {
             ownerAccountIds[entry[0]] = {
                 accountId: Number.isSafeInteger(entry[1]) ? entry[1] : null,
-                isOwner: entry[2] === true
+                role: entry[2] === "administrator" ? "administrator" :
+                    entry[2] === "owner" || entry[2] === true ? "owner" : null,
+                hidden: entry[3] === true
             };
         }
     }
@@ -526,10 +537,40 @@ function updateLeaderboardDisplay() {
 }
 
 function updateChatRosterSize() {
-    var width = Math.min(window.innerWidth * 0.9, chatRosterColumns * 280);
-    chatRoster.style.width = width + "px";
-    chatRoster.style.fontSize = Math.max(12, Math.min(20,
-        Math.floor(width / Math.max(1, chatRosterColumns * chatRosterLongestText * 0.58)))) + "px";
+    var maxWidth = window.innerWidth * 0.92;
+    var playerCount = chatRoster.querySelectorAll(".chatRosterEntry").length;
+    var fontSize = playerCount <= 3 ? 24 :
+        playerCount <= 6 ? 22 :
+            playerCount <= 10 ? 20 :
+                playerCount <= 20 ? 18 : 17;
+    var columnWidths = chatRosterColumnLongestText.map(function (length) {
+        return Math.max(220, Math.ceil(length * fontSize * 0.58) + 18);
+    });
+    var gapWidth = Math.max(0, chatRosterColumns - 1) * 28;
+    var contentWidth = columnWidths.reduce(function (total, width) {
+        return total + width;
+    }, gapWidth);
+    if (contentWidth > maxWidth) {
+        fontSize = Math.max(15, Math.floor(fontSize * (maxWidth - gapWidth) /
+            Math.max(1, contentWidth - gapWidth)));
+        columnWidths = chatRosterColumnLongestText.map(function (length) {
+            return Math.max(180, Math.ceil(length * fontSize * 0.58) + 18);
+        });
+        contentWidth = columnWidths.reduce(function (total, width) {
+            return total + width;
+        }, gapWidth);
+    }
+    var rosterWidth = Math.min(maxWidth, contentWidth);
+    chatRoster.style.width = rosterWidth + "px";
+    chatHolder.style.width = Math.min(window.innerWidth * 0.92, rosterWidth + 20) + "px";
+    chatRoster.style.fontSize = fontSize + "px";
+    chatRoster.style.gridTemplateColumns = columnWidths.map(function (width) {
+        return width + "px";
+    }).join(" ");
+    var rows = chatRoster.querySelectorAll(".chatRosterEntry");
+    for (var i = 0; i < rows.length; i++) {
+        rows[i].style.fontSize = fontSize + "px";
+    }
 }
 
 function receivePlayersList(data) {
@@ -542,17 +583,51 @@ function receivePlayersList(data) {
     });
     UTILS.removeAllChildren(chatRoster);
     chatRosterLongestText = 0;
+    chatRosterColumnLongestText = [];
     chatRosterColumns = Math.max(1, Math.ceil(entries.length / 10));
     chatRoster.style.setProperty("--roster-rows", Math.min(10, entries.length) || 1);
-    chatRoster.style.gridTemplateColumns = "repeat(" + chatRosterColumns + ", minmax(0, 1fr))";
     for (var i = 0; i < entries.length; i++) {
         var entry = entries[i];
+        var column = Math.floor(i / 10);
         var row = document.createElement("div");
         row.className = "chatRosterEntry";
-        row.textContent = "#" + entry[0] + " " + (entry[1] || "unknown") +
-            " (" + (entry[2] ? "account " + entry[2] : "no account") + ")";
+        var label = document.createElement("span");
+        label.className = "chatRosterLabel";
+        label.textContent = "#" + entry[0] + " " + (entry[1] || "unknown") +
+            " (account " + (entry[2] ? "yes" : "no") + ")";
+        row.appendChild(label);
+        var targetRole = ownerAccountIds[entry[0]] && ownerAccountIds[entry[0]].role;
+        var canManageTarget = entry[0] != playerSID &&
+            !(currentStaffRole === "administrator" && targetRole === "owner");
+        if (canManageTarget) {
+            var actions = document.createElement("span");
+            actions.className = "chatRosterActions";
+            var banButton = document.createElement("button");
+            banButton.type = "button";
+            banButton.className = "chatRosterAction chatRosterBan";
+            banButton.textContent = "Ban";
+            banButton.setAttribute("aria-label", "Ban " + (entry[1] || "player"));
+            var kickButton = document.createElement("button");
+            kickButton.type = "button";
+            kickButton.className = "chatRosterAction chatRosterKick";
+            kickButton.textContent = "Kick";
+            kickButton.setAttribute("aria-label", "Kick " + (entry[1] || "player"));
+            var muteButton = document.createElement("button");
+            muteButton.type = "button";
+            muteButton.className = "chatRosterAction chatRosterMute";
+            muteButton.textContent = "Mute";
+            muteButton.setAttribute("aria-label", "Mute " + (entry[1] || "player"));
+            actions.appendChild(banButton);
+            actions.appendChild(kickButton);
+            actions.appendChild(muteButton);
+            row.appendChild(actions);
+        }
         chatRoster.appendChild(row);
         chatRosterLongestText = Math.max(chatRosterLongestText, row.textContent.length);
+        chatRosterColumnLongestText[column] = Math.max(
+            chatRosterColumnLongestText[column] || 0,
+            row.textContent.length
+        );
     }
     if (!entries.length) {
         var empty = document.createElement("div");
@@ -560,12 +635,15 @@ function receivePlayersList(data) {
         empty.textContent = "No players are online.";
         chatRoster.appendChild(empty);
         chatRosterLongestText = empty.textContent.length;
+        chatRosterColumnLongestText = [chatRosterLongestText];
     }
     updateChatRosterSize();
     chatRoster.style.display = "grid";
     chatHolder.style.display = "block";
+    chatHolder.classList.add("rosterOpen");
+    chatBox.style.display = "none";
+    chatRosterClose.style.display = "inline-block";
     chatBox.value = "";
-    updateChatMuteUI();
 }
 
 function flipLeaderboard() {
@@ -581,6 +659,7 @@ window.addEventListener("resize", function () {
     updateLeaderboardDisplay();
     if (chatRoster.style.display === "grid") updateChatRosterSize();
 });
+chatRosterClose.addEventListener("click", closeChat);
 
 var featuredYoutuber = document.getElementById('featuredYoutube');
 var youtuberList = [{
@@ -1334,7 +1413,7 @@ function showAllianceMenu() {
 }
 
 function aJoinReq(join) {
-    io.send("P", allianceNotifications[0].sid, join);
+    io.send("P", allianceNotifications[0].sid, Boolean(join));
     allianceNotifications.splice(0, 1);
     updateNotifications();
 }
@@ -1437,7 +1516,7 @@ function renderMinimap(delta) {
         mapContext.fillStyle = "#fff";
         renderCircle((player.x / config.mapScale) * mapDisplay.width, (player.y / config.mapScale) * mapDisplay.height, 7, mapContext, true);
         mapContext.fillStyle = "rgba(255,255,255,0.35)";
-        if ((player.team || config.isSandbox) && minimapData) {
+        if (player.team && minimapData) {
             for (var i = 0; i < minimapData.length;) {
                 renderCircle((minimapData[i] / config.mapScale) * mapDisplay.width, (minimapData[i + 1] / config.mapScale) * mapDisplay.height, 7, mapContext, true);
                 i += 2;
@@ -2103,6 +2182,9 @@ function closeChat() {
     chatBox.value = "";
     chatHolder.style.display = "none";
     chatRoster.style.display = "none";
+    chatHolder.classList.remove("rosterOpen");
+    chatBox.style.display = "block";
+    chatRosterClose.style.display = "none";
 }
 
 function checkProfanityString(text) {
@@ -2513,14 +2595,19 @@ function selectToBuild(index, wpn) {
     io.send("z", index, wpn);
 }
 
-function enterGame() {
-    saveVal("moo_name", nameInput.value);
+async function enterGame() {
     if (!inGame && socketReady() && connected) {
         var tmpName = nameInput.value.trim() ? nameInput.value : "unknown";
         if (nameFilter.isBadName(tmpName)) {
             showNameRejected("Your username has been flagged as inappropriate. Please choose a different username to continue playing");
             return;
         }
+        if (currentAccountProfile &&
+            currentAccountProfile.username.toLowerCase() !== tmpName.toLowerCase()) {
+            if (!await saveAccountName(tmpName)) return;
+            tmpName = currentAccountProfile.username;
+        }
+        saveVal("moo_name", tmpName);
         inGame = true;
         updatePingDisplayVisibility();
         showLoadingText("Loading...");
@@ -2533,20 +2620,33 @@ function enterGame() {
 }
 
 var accountUiBound = false;
+var currentAccountProfile = null;
+var accountNoticeTimer = null;
 
 function showAccountNotice(message, isError) {
     var notice = document.getElementById("accountNotice");
+    var accountCard = document.getElementById("accountCard");
     if (!notice) return;
+    if (accountNoticeTimer) clearTimeout(accountNoticeTimer);
     notice.textContent = message || "";
     notice.style.display = message ? "block" : "none";
     notice.style.color = isError ? "#b33" : "#38812a";
+    if (accountCard) accountCard.classList.toggle("accountNoticeVisible", Boolean(message));
+    if (message) {
+        accountNoticeTimer = setTimeout(function () {
+            notice.textContent = "";
+            notice.style.display = "none";
+            if (accountCard) accountCard.classList.remove("accountNoticeVisible");
+            accountNoticeTimer = null;
+        }, 3000);
+    }
 }
 
 function accountErrorText(error) {
     var messages = {
         invalid_username: "That player name is unavailable or filtered.",
         username_taken: "That player name is already in use.",
-        username_cooldown: "You can only change your player name once every 24 hours.",
+        username_cooldown: "You can only change your account username once every 14 days.",
         login_required: "Sign in again to change account settings.",
         account_unavailable: "This account is currently unavailable."
     };
@@ -2560,6 +2660,21 @@ function formatAccountTime(seconds) {
     return hours ? hours + "h" + (minutes ? " " + minutes + "m" : "") : minutes + "m";
 }
 
+function formatNameCooldown(profile) {
+    var availableAt = Number(profile && profile.usernameChangeAvailableAt) || 0;
+    var remaining = Math.max(0, availableAt - Date.now());
+    if (!remaining) {
+        return "You can change your account username now. Your in-game name is separate.";
+    }
+    var days = Math.ceil(remaining / (24 * 60 * 60 * 1000));
+    return "You can change your account username in " + days + " day" + (days === 1 ? "" : "s") + ". This is separate from your in-game name.";
+}
+
+function toggleNameHelp() {
+    var help = document.getElementById("accountUsernameCooldown");
+    if (help) help.classList.toggle("visible");
+}
+
 function setAccountStat(id, value) {
     document.getElementById(id).textContent = value;
 }
@@ -2569,6 +2684,7 @@ async function loadAccountUi() {
     var signIn = document.getElementById("accountSignIn");
     var create = document.getElementById("accountCreate");
     var profileHolder = document.getElementById("accountProfile");
+    var statusBox = document.getElementById("accountStatusBox");
     var description = document.getElementById("accountDescription");
     var guestMessage = document.getElementById("accountGuestMessage");
     var error = new URLSearchParams(window.location.search).get("accountError");
@@ -2591,18 +2707,22 @@ async function loadAccountUi() {
             signIn.style.display = "flex";
             create.style.display = "flex";
             profileHolder.style.display = "none";
+            statusBox.style.display = "block";
+            currentAccountProfile = null;
             nameInput.readOnly = false;
             return;
         }
 
         var profile = data.profile;
+        currentAccountProfile = profile;
         var stats = profile.stats || {};
         signIn.style.display = "none";
         create.style.display = "none";
         accountCard.classList.add("accountSignedIn");
         profileHolder.style.display = "block";
-        document.getElementById("accountName").textContent = profile.username;
+        statusBox.style.display = "none";
         document.getElementById("accountUsernameInput").value = profile.username;
+        document.getElementById("accountUsernameCooldown").textContent = formatNameCooldown(profile);
         var kills = Number(stats.kills) || 0;
         var deaths = Number(stats.deaths) || 0;
         var formatNumber = function (value) {
@@ -2624,8 +2744,7 @@ async function loadAccountUi() {
         setAccountStat("accountStatBestKills", formatNumber(stats.best_kills));
         setAccountStat("accountStatLives", formatNumber(stats.lives));
         setAccountStat("accountStatPlayed", formatAccountTime(stats.play_seconds));
-        nameInput.value = profile.username;
-        nameInput.readOnly = true;
+        nameInput.readOnly = false;
         description.textContent = "Your account saves your player name and game stats.";
         guestMessage.textContent = "Your account is connected.";
     } catch (error) {
@@ -2633,8 +2752,14 @@ async function loadAccountUi() {
     }
 }
 
-async function saveAccountName() {
-    var username = document.getElementById("accountUsernameInput").value;
+async function saveAccountName(username) {
+    username = document.getElementById("accountUsernameInput").value;
+    if (currentAccountProfile && typeof currentAccountProfile.username === "string" &&
+        currentAccountProfile.username.toLowerCase() === username.trim().toLowerCase()) {
+        document.getElementById("accountUsernameInput").value = currentAccountProfile.username;
+        showAccountNotice("That is already your account username.", true);
+        return true;
+    }
     try {
         var response = await fetch("/api/account/username", {
             method: "POST",
@@ -2644,13 +2769,31 @@ async function saveAccountName() {
         });
         var data = await response.json();
         if (!response.ok) {
+            if (currentAccountProfile && currentAccountProfile.username) {
+                document.getElementById("accountUsernameInput").value = currentAccountProfile.username;
+            }
             showAccountNotice(accountErrorText(data.error), true);
             return;
         }
-        showAccountNotice("Player name saved. Reloading your game...", false);
-        setTimeout(function () { window.location.reload(); }, 500);
+        if (data.unchanged) {
+            document.getElementById("accountUsernameInput").value = data.username;
+            showAccountNotice("That is already your account username.", true);
+            return true;
+        }
+        currentAccountProfile.username = data.username;
+        currentAccountProfile.usernameChangedAt = Date.now();
+        currentAccountProfile.usernameChangeAvailableAt =
+            currentAccountProfile.usernameChangedAt + 14 * 24 * 60 * 60 * 1000;
+        document.getElementById("accountUsernameInput").value = data.username;
+        document.getElementById("accountUsernameCooldown").textContent = formatNameCooldown(currentAccountProfile);
+        showAccountNotice("Account username saved.", false);
+        return true;
     } catch (error) {
-        showAccountNotice("Could not save your player name. Please try again.", true);
+        if (currentAccountProfile && currentAccountProfile.username) {
+            document.getElementById("accountUsernameInput").value = currentAccountProfile.username;
+        }
+        showAccountNotice("Could not save your account username. Please try again.", true);
+        return false;
     }
 }
 
@@ -2691,6 +2834,7 @@ function setupAccountUi() {
     document.getElementById("accountSaveName").addEventListener("click", saveAccountName);
     document.getElementById("accountLogout").addEventListener("click", signOutAccount);
     document.getElementById("accountDelete").addEventListener("click", deleteAccount);
+    document.getElementById("accountNameHelp").addEventListener("click", toggleNameHelp);
     loadAccountUi();
 }
 
@@ -2783,7 +2927,6 @@ function killPlayer() {
         mainMenu.style.display = "block";
         diedText.style.display = "none";
     }, config.deathFadeout);
-    updateServerList();
 }
 
 function killObjects(sid) {
@@ -3125,11 +3268,19 @@ function updateGame() {
                     var tmpText = (tmpObj.team ? "[" + tmpObj.team + "] " : "") + (tmpObj.name || "");
                     var ownerInfo = tmpObj.isPlayer ? ownerAccountIds[tmpObj.sid] : null;
                     var isOwnerShown = tmpObj.isPlayer && shownOwnerIds[tmpObj.sid] === true;
-                    var isOwner = isOwnerShown || Boolean(ownerInfo && ownerInfo.isOwner);
+                    var staffRole = ownerInfo && ownerInfo.role;
+                    var isStaffShown = isOwnerShown || Boolean(staffRole);
+                    var isAdministrator = staffRole === "administrator";
+                    var isHiddenStaff = Boolean(staffRole && ownerInfo && ownerInfo.hidden);
                     if (tmpText != "") {
                         mainContext.font = (tmpObj.nameScale || 30) + "px Hammersmith One";
                         var tmpTextWidth = mainContext.measureText(tmpText).width;
-                        mainContext.fillStyle = isOwner ? "#ff9f35" : "#fff";
+                        mainContext.globalAlpha = isHiddenStaff ? 0.5 : 1;
+                        mainContext.fillStyle = isHiddenStaff
+                            ? "#b8b8b8"
+                            : isStaffShown
+                                ? (isAdministrator ? "#e05252" : "#ff9f35")
+                                : "#fff";
                         mainContext.textBaseline = "middle";
                         mainContext.textAlign = "center";
                         mainContext.lineWidth = (tmpObj.nameScale ? 11 : 8);
@@ -3137,8 +3288,10 @@ function updateGame() {
                         mainContext.strokeText(tmpText, tmpObj.x - xOffset, (tmpObj.y - yOffset - tmpObj.scale) - config.nameY);
                         mainContext.fillText(tmpText, tmpObj.x - xOffset, (tmpObj.y - yOffset - tmpObj.scale) - config.nameY);
                         if ((ownerInfo && ownerInfo.accountId) || isOwnerShown) {
-                            var accountText = ownerInfo && ownerInfo.isOwner
-                                ? "OWNER"
+                            var accountText = staffRole === "administrator"
+                                ? "ADMINISTRATOR"
+                                : staffRole === "owner" || isOwnerShown
+                                    ? "OWNER"
                                 : ownerInfo && ownerInfo.accountId
                                     ? "#" + ownerInfo.accountId
                                     : "OWNER";
@@ -3146,9 +3299,14 @@ function updateGame() {
                             mainContext.font = "15px Hammersmith One";
                             mainContext.lineWidth = 4;
                             mainContext.strokeText(accountText, tmpObj.x - xOffset, accountY);
-                            mainContext.fillStyle = isOwner ? "#ff9f35" : "#fff";
+                            mainContext.fillStyle = isHiddenStaff
+                                ? "#b8b8b8"
+                                : isStaffShown
+                                    ? (isAdministrator ? "#e05252" : "#ff9f35")
+                                    : "#fff";
                             mainContext.fillText(accountText, tmpObj.x - xOffset, accountY);
                         }
+                        mainContext.globalAlpha = 1;
                         if (tmpObj.isLeader && iconSprites["crown"].isLoaded) {
                             var tmpS = config.crownIconScale;
                             var tmpX = tmpObj.x - xOffset - (tmpS / 2) - (tmpTextWidth / 2) - config.crownPad;

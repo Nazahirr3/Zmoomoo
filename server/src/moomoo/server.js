@@ -63,12 +63,13 @@ export class Game {
         const timer = new NanoTimer;
 
         let last = performance.now();
-        let minimap_cd = config.minimapRate;
+        let minimap_cd = 0;
         const minimap_ext = [];
         let _sent_players = [];
         let _sent_objects = [];
 
         setInterval(() => {
+            try {
 
             const t = performance.now();
 
@@ -90,7 +91,19 @@ export class Game {
 
             for (const player of this.players) {
 
-                player.update(delta);
+                try {
+                    player.update(delta);
+                } catch (error) {
+                    console.error(`[game] Player ${player.sid} update failed:`, error);
+                    if (player.socket) {
+                        try {
+                            player.socket.close(1011, "server error");
+                        } catch (closeError) {
+                            console.error(`[game] Failed to close player ${player.sid}:`, closeError);
+                        }
+                    }
+                    continue;
+                }
                 player.iconIndex = 0;
 
                 if (!player.alive) continue;
@@ -113,11 +126,21 @@ export class Game {
 
             if (leader) leader.iconIndex = 1;
 
-            for (const projectile of this.projectiles)
-                projectile.update(delta);
+            for (const projectile of this.projectiles) {
+                try {
+                    projectile.update(delta);
+                } catch (error) {
+                    console.error("[game] Projectile update failed:", error);
+                    projectile.active = false;
+                }
+            }
 
-            this.updateAnimals(delta);
-            this.updateTurrets(delta);
+            try {
+                this.updateAnimals(delta);
+                this.updateTurrets(delta);
+            } catch (error) {
+                console.error("[game] AI/turret update failed:", error);
+            }
 
             {
                 const metric = (player) => player.points;
@@ -219,21 +242,22 @@ export class Game {
 
                 player.send("H", _sent_objects);
 
-                if (minimap_ext.length === 0) continue;
-
-                const coords = [];
-                for (let mi = 0; mi < minimap_ext.length; mi++) {
-                    const target = minimap_ext[mi];
-                    if (target.sid === player.sid) continue;
-                    if (!config.isSandbox && player.team && target.team !== player.team) continue;
-                    coords.push(target.x, target.y);
-                }
-                if (coords.length > 0) {
+                if (upd_map) {
+                    const coords = [];
+                    for (let mi = 0; mi < minimap_ext.length; mi++) {
+                        const target = minimap_ext[mi];
+                        if (target.sid === player.sid) continue;
+                        if (!player.team || target.team !== player.team) continue;
+                        coords.push(target.x, target.y);
+                    }
                     player.send("7", coords);
                 }
 
             }
 
+            } catch (error) {
+                console.error("[game] Tick failed:", error);
+            }
         }, nano);
 
         const init_objects = () => {
@@ -587,10 +611,10 @@ export class Game {
         }
     }
 
-    addPlayer(socket) {
+    addPlayer(socket, active = true) {
 
         const string_id = UTILS.randomString(16);
-        const sid = this.id_storage.findIndex(bool => bool);
+        const sid = active ? this.id_storage.findIndex(bool => bool) : -1;
         const player = new Player(
             string_id,
             sid,
@@ -612,16 +636,23 @@ export class Game {
             () => {}
         );
 
+        if (active) this.activatePlayer(player);
+
+        return player;
+
+    }
+
+    activatePlayer(player) {
+        const sid = this.id_storage.findIndex(bool => bool);
+        if (sid < 0 || this.players.length >= config.maxPlayersHard) return false;
+        player.sid = sid;
+        this.id_storage[sid] = false;
+        this.players.push(player);
         player.send("io-init", player.id);
         player.send("A", {
             teams: this.clan_manager.ext()
         });
-
-        this.id_storage[sid] = false;
-        this.players.push(player);
-
-        return player;
-
+        return true;
     }
 
     removePlayer(id) {

@@ -119,7 +119,7 @@ var groupedConfig = {
         maxPlayers: baseMaxPlayers,
         maxPlayersHard: baseMaxPlayers + 10,
         collisionDepth: 6,
-        minimapRate: 3000  // ms
+        minimapRate: 500  // ms
     },
 
     collisions: {

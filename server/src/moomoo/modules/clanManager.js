@@ -26,6 +26,7 @@ export class Clan {
         if (!player) return;
 
         if (player.team) return;
+        if (this.teams.size >= 8) return;
 
         if (sid === this.owner.sid) {
             player.is_owner = true;
@@ -45,11 +46,13 @@ export class Clan {
 
     kick(sid) {
 
+        if (sid === this.owner.sid || !this.teams.has(sid)) return;
         const player = this.players.find(x => x.sid === sid);
 
         if (!player) return;
 
         player.team = null;
+        player.is_owner = false;
         player.send("3", null, false);
 
         if (this.teams.delete(sid)) this.update();
@@ -76,7 +79,7 @@ export class Clan {
 
             const player = this.players.find(x => x.sid === sid);
 
-            if (!player) break;
+            if (!player) continue;
 
             player.send("4", ext);
 
@@ -123,7 +126,7 @@ export class ClanManager {
             
             const player = this.players.find(x => x.sid === sid);
 
-            if (!player) break;
+            if (!player) continue;
 
             player.team = null;
             player.is_owner = false;
@@ -166,11 +169,13 @@ export class ClanManager {
 
     confirm_join(name, sid, join) {
 
+        const clan = this.clans.get(name);
+        if (!clan || !clan.owner.notify.has(sid)) return;
         const player = this.players.find(x => x.sid === sid);
 
         if (!player) return;
 
-        this.unnotify(name, player?.sid);
+        this.unnotify(name, player.sid);
 
         if (join) {
             this.join(name, player);

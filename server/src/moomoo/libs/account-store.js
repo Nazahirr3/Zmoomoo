@@ -1,8 +1,10 @@
 import { randomBytes, createHash, createHmac } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { isIP } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { normalizeIpAddress } from "./network-controls.js";
 
 const DATA_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../data");
 const DEFAULT_DB_PATH = path.join(DATA_DIR, "accounts.sqlite");
@@ -31,6 +33,7 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
             discord_id TEXT NOT NULL UNIQUE,
+            game_id TEXT NOT NULL,
             email TEXT,
             email_verified INTEGER NOT NULL DEFAULT 0,
             username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -80,7 +83,8 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
             user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             offense_count INTEGER NOT NULL DEFAULT 0,
             last_offense_at INTEGER NOT NULL DEFAULT 0,
-            muted_until INTEGER NOT NULL DEFAULT 0
+            muted_until INTEGER NOT NULL DEFAULT 0,
+            mute_reason TEXT NOT NULL DEFAULT 'no reason given'
         );
         CREATE TABLE IF NOT EXISTS bans (
             discord_id TEXT PRIMARY KEY,
@@ -124,6 +128,22 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
     if (!userColumns.some(column => column.name === "email_verified")) {
         db.exec("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0");
     }
+    if (!userColumns.some(column => column.name === "game_id")) {
+        db.exec("ALTER TABLE users ADD COLUMN game_id TEXT");
+    }
+    const punishmentColumns = new Set(db.prepare("PRAGMA table_info(chat_punishments)").all().map(column => column.name));
+    if (!punishmentColumns.has("mute_reason")) {
+        db.exec("ALTER TABLE chat_punishments ADD COLUMN mute_reason TEXT NOT NULL DEFAULT 'no reason given'");
+    }
+    // Give existing accounts the same private game ID that new accounts receive.
+    const usersWithoutGameId = db.prepare(
+        "SELECT id FROM users WHERE game_id IS NULL OR game_id = ''"
+    ).all();
+    const updateGameId = db.prepare("UPDATE users SET game_id = ? WHERE id = ?");
+    for (const user of usersWithoutGameId) {
+        updateGameId.run(randomBytes(12).toString("base64url"), user.id);
+    }
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS users_game_id_idx ON users(game_id)");
     const statColumns = db.prepare("PRAGMA table_info(stats)").all();
     const existingStatColumns = new Set(statColumns.map(column => column.name));
     for (const column of [
@@ -148,7 +168,7 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
         WHERE sessions.token_hash = ? AND sessions.expires_at > ?
     `);
     const findStats = db.prepare("SELECT * FROM stats WHERE user_id = ?");
-    const findPunishment = db.prepare("SELECT offense_count, last_offense_at, muted_until FROM chat_punishments WHERE user_id = ?");
+    const findPunishment = db.prepare("SELECT offense_count, last_offense_at, muted_until, mute_reason FROM chat_punishments WHERE user_id = ?");
     const findBan = db.prepare("SELECT discord_id, banned_until, reason FROM bans WHERE discord_id = ?");
     const findUsersByQuery = db.prepare(`
         SELECT id, discord_id, username, created_at, last_login_at, banned_until, ban_reason
@@ -174,11 +194,12 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
 
         for (let attempt = 0; attempt < 5; attempt++) {
             const username = "Player" + randomBytes(3).toString("hex").slice(0, 6);
+            const gameId = randomBytes(12).toString("base64url");
             try {
                 const result = db.prepare(`
-                    INSERT INTO users (discord_id, username, created_at, last_login_at)
-                    VALUES (?, ?, ?, ?)
-                `).run(discordId, username, now, now);
+                    INSERT INTO users (discord_id, game_id, username, created_at, last_login_at)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(discordId, gameId, username, now, now);
                 const userId = Number(result.lastInsertRowid);
                 db.prepare("INSERT INTO stats (user_id) VALUES (?)").run(userId);
                 db.prepare("INSERT INTO chat_punishments (user_id) VALUES (?)").run(userId);
@@ -189,7 +210,8 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
                 `).run("discord", discordId, userId, now, now);
                 return findUserById.get(userId);
             } catch (error) {
-                if (!String(error.message).includes("users.username")) throw error;
+                const message = String(error.message);
+                if (!message.includes("users.username") && !message.includes("users.game_id")) throw error;
             }
         }
 
@@ -278,7 +300,18 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
 
     function hashIp(address) {
         // keep raw player ips out of the database
+        return createHmac("sha256", ipHashSecret).update(normalizeIpAddress(address)).digest("hex");
+    }
+
+    function hashLegacyIp(address) {
         return createHmac("sha256", ipHashSecret).update(String(address)).digest("hex");
+    }
+
+    function getIpHashCandidates(address) {
+        const normalized = normalizeIpAddress(address);
+        const addresses = new Set([String(address), normalized]);
+        if (isIP(normalized) === 4) addresses.add(`::ffff:${normalized}`);
+        return [...new Set([...addresses].map(hashLegacyIp))];
     }
 
     function banIp(address, bannedUntil, reason = "", executorDiscordId = "") {
@@ -294,15 +327,24 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
     }
 
     function isIpBanned(address) {
-        const row = db.prepare("SELECT banned_until, reason FROM banned_ips WHERE ip_hash = ?").get(hashIp(address));
+        const hashes = getIpHashCandidates(address);
+        const row = db.prepare(`
+            SELECT banned_until, reason FROM banned_ips
+            WHERE ip_hash IN (${hashes.map(() => "?").join(",")})
+        `).get(...hashes);
         if (!row) return null;
         if (Number(row.banned_until) > Date.now()) return { ...row };
-        db.prepare("DELETE FROM banned_ips WHERE ip_hash = ?").run(hashIp(address));
+        db.prepare(`
+            DELETE FROM banned_ips WHERE ip_hash IN (${hashes.map(() => "?").join(",")})
+        `).run(...hashes);
         return null;
     }
 
     function unbanIp(address) {
-        db.prepare("DELETE FROM banned_ips WHERE ip_hash = ?").run(hashIp(address));
+        const hashes = getIpHashCandidates(address);
+        db.prepare(`
+            DELETE FROM banned_ips WHERE ip_hash IN (${hashes.map(() => "?").join(",")})
+        `).run(...hashes);
     }
 
     function saveBan(discordId, bannedUntil, reason = "") {
@@ -426,18 +468,30 @@ export function createAccountStore(dbPath = process.env.ACCOUNT_DB_PATH || DEFAU
 
     function getPunishment(userId) {
         const punishment = findPunishment.get(userId);
-        return punishment ? { ...punishment } : { offense_count: 0, last_offense_at: 0, muted_until: 0 };
+        return punishment ? { ...punishment } : {
+            offense_count: 0,
+            last_offense_at: 0,
+            muted_until: 0,
+            mute_reason: "no reason given"
+        };
     }
 
-    function savePunishment(userId, offenseCount, lastOffenseAt, mutedUntil) {
+    function savePunishment(userId, offenseCount, lastOffenseAt, mutedUntil, muteReason = "no reason given") {
         db.prepare(`
-            INSERT INTO chat_punishments (user_id, offense_count, last_offense_at, muted_until)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO chat_punishments (user_id, offense_count, last_offense_at, muted_until, mute_reason)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 offense_count = excluded.offense_count,
                 last_offense_at = excluded.last_offense_at,
-                muted_until = excluded.muted_until
-        `).run(userId, offenseCount, lastOffenseAt, mutedUntil);
+                muted_until = excluded.muted_until,
+                mute_reason = excluded.mute_reason
+        `).run(
+            userId,
+            offenseCount,
+            lastOffenseAt,
+            mutedUntil,
+            String(muteReason || "").trim().slice(0, 500) || "no reason given"
+        );
     }
 
     return {

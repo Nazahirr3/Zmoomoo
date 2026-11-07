@@ -1916,7 +1916,9 @@ span {
 }
 
 #chatHolder {
-        position: absolute;
+        position: fixed;
+        left: 50%;
+        transform: translateX(-50%);
         bottom: 200px;
         width: 100%;
         text-align: center;
@@ -2155,8 +2157,9 @@ span {
 .chatRosterEntry {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 10px;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 4px 8px;
         font-family: 'Hammersmith One', sans-serif;
         font-weight: normal;
         line-height: 1.25;
@@ -2165,9 +2168,56 @@ span {
 }
 
 .chatRosterLabel {
+        flex: 1 1 auto;
         min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
+}
+
+.chatRosterAccountStatus,
+.chatRosterIdLabel,
+.chatRosterRiskLabel {
+        flex: 0 0 auto;
+        white-space: nowrap;
+}
+
+.chatRosterAccountStatus {
+        font-family: Arial, sans-serif;
+        font-size: 0.72em;
+        font-weight: 700;
+}
+
+.chatRosterAccountStatus.hasAccount {
+        color: #a7f3b1;
+}
+
+.chatRosterAccountStatus.noAccount {
+        color: #e0e0e0;
+}
+
+.chatRosterRiskLabel {
+        color: #ffd166;
+        font-size: 0.72em;
+}
+
+.chatRosterPlayerId {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: inherit;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 0.78em;
+        font-weight: 700;
+        letter-spacing: 0 !important;
+        word-spacing: 0;
+        cursor: pointer;
+        text-decoration: underline;
+        white-space: nowrap;
+}
+
+.chatRosterPlayerId:hover,
+.chatRosterPlayerId:focus-visible {
+        color: #ffd166;
 }
 
 .chatRosterActions {
@@ -2401,7 +2451,12 @@ span {
         cursor: pointer;
 }
 
-.storeTab:hover {
+#builderStoreTabs {
+        display: none;
+}
+
+.storeTab:hover,
+.storeTab.active {
         background-color: rgba(50, 50, 50, 0.25);
 }
 
@@ -2411,6 +2466,94 @@ span {
         font-size: 24px;
         text-align: left;
         cursor: pointer;
+}
+
+#storeMenu.builder-mode #storeTabs {
+        display: none;
+}
+
+#storeMenu.builder-mode #builderStoreTabs {
+        display: block !important;
+}
+
+#storeMenu.builder-mode {
+        position: fixed;
+        inset: 0;
+        top: 0;
+        width: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        transform: none;
+        pointer-events: none;
+        z-index: 20;
+}
+
+#storeMenu.builder-mode #builderStoreTabs {
+        display: flex !important;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        padding-bottom: 15px;
+        pointer-events: auto;
+}
+
+#storeMenu.builder-mode .storeTab {
+        width: min(183px, calc((100vw - 42px) / 2));
+        margin: 0 !important;
+        box-sizing: border-box;
+}
+
+#storeMenu.builder-mode #storeHolder {
+        width: min(760px, calc(100vw - 32px));
+        height: min(480px, calc(100vh - 80px));
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        gap: 12px;
+        box-sizing: border-box;
+        background-color: rgba(0, 0, 0, 0.25);
+        border-radius: 4px;
+        pointer-events: auto;
+}
+
+.builderCatalogTitle {
+        grid-column: 1 / -1;
+        color: #fff;
+        font-size: 20px;
+        text-align: center;
+        padding: 8px;
+}
+
+.builderCatalogItem {
+        min-height: 100px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.25);
+        border: 2px solid rgba(255, 255, 255, 0.18);
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 15px;
+        text-transform: capitalize;
+}
+
+.builderCatalogItem:hover {
+        background: rgba(50, 50, 50, 0.4);
+        border-color: rgba(255, 255, 255, 0.6);
+}
+
+.builderCatalogItem.selected {
+        border-color: #f0c050;
+        background: rgba(90, 75, 35, 0.55);
+}
+
+.builderCatalogIcon {
+        width: 48px;
+        height: 48px;
+        object-fit: contain;
 }
 
 .itemPrice {

@@ -13,6 +13,8 @@ test("Discord accounts, sessions, stats, names, and mutes persist in the store",
         const user = store.findOrCreateDiscordUser("123456789012345678");
         const sameUser = store.findOrCreateDiscordUser("123456789012345678");
         assert.equal(sameUser.id, user.id);
+        assert.match(user.game_id, /^[A-Za-z0-9_-]{16}$/);
+        assert.equal(sameUser.game_id, user.game_id);
         assert.match(user.username, /^Player[a-f0-9]{6}$/);
         assert.deepEqual(store.getProfile(user.id).stats, {
             kills: 0,
@@ -73,12 +75,15 @@ test("Discord accounts, sessions, stats, names, and mutes persist in the store",
             lives: 1
         });
 
-        store.savePunishment(user.id, 2, 1000, 2000);
+        store.savePunishment(user.id, 2, 1000, 2000, "spam");
         assert.deepEqual(store.getPunishment(user.id), {
             offense_count: 2,
             last_offense_at: 1000,
-            muted_until: 2000
+            muted_until: 2000,
+            mute_reason: "spam"
         });
+        store.savePunishment(user.id, 2, 1000, 2000, "   ");
+        assert.equal(store.getPunishment(user.id).mute_reason, "no reason given");
 
         store.deleteUser(user.id);
         assert.equal(store.getSession(session.token), null);
@@ -109,14 +114,27 @@ test("existing account databases gain username cooldown tracking", () => {
             best_score INTEGER NOT NULL DEFAULT 0,
             play_seconds INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE chat_punishments (
+            user_id INTEGER PRIMARY KEY,
+            offense_count INTEGER NOT NULL DEFAULT 0,
+            last_offense_at INTEGER NOT NULL DEFAULT 0,
+            muted_until INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO users (discord_id, username, created_at, last_login_at)
+        VALUES ('123456789012345678', 'LegacyPlayer', 1, 1);
+        INSERT INTO chat_punishments (user_id, offense_count, last_offense_at, muted_until)
+        VALUES (1, 2, 3, 9999999999999);
     `);
     legacyDatabase.close();
 
     const store = createAccountStore(databasePath);
     try {
         const user = store.findOrCreateDiscordUser("123456789012345678");
+        assert.match(user.game_id, /^[A-Za-z0-9_-]{16}$/);
+        assert.equal(store.findOrCreateDiscordUser("123456789012345678").game_id, user.game_id);
         assert.equal(store.updateUsername(user.id, "Yandel"), true);
         assert.equal(store.getProfile(user.id).stats.animal_kills, 0);
+        assert.equal(store.getPunishment(user.id).mute_reason, "no reason given");
     } finally {
         store.close();
         rmSync(directory, { recursive: true, force: true });
@@ -172,7 +190,7 @@ test("IP bans are persisted as non-reversible hashes", () => {
     const store = createAccountStore(":memory:");
     try {
         const until = Date.now() + 60_000;
-        store.banIp("203.0.113.10", until, "test", "123456789012345678");
+        store.banIp("::ffff:203.0.113.10", until, "test", "123456789012345678");
         assert.equal(store.isIpBanned("203.0.113.10").reason, "test");
         assert.equal(store.isIpBanned("203.0.113.11"), null);
         store.unbanIp("203.0.113.10");

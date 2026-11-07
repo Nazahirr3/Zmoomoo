@@ -31,6 +31,8 @@ module.exports = function (id, sid, config, UTILS, projectileManager,
     this.pps = 0;
     this.sandboxMillCount = 0;
     this.moveDir = undefined;
+    this.sleighMode = false;
+    this.sleighSpeedMultiplier = 1;
     this.skinRot = 0;
     this.lastPing = 0;
     this.iconIndex = 0;
@@ -39,6 +41,8 @@ module.exports = function (id, sid, config, UTILS, projectileManager,
     this.ping = -1;
 
     this.spawn = function (moofoll) {
+        this.sleighMode = false;
+        this.sleighSpeedMultiplier = 1;
         this.active = true;
         this.alive = true;
         this.lockMove = false;
@@ -222,8 +226,9 @@ module.exports = function (id, sid, config, UTILS, projectileManager,
             var buildPenalty = (this.buildIndex >= 0) ? (config.physics ? config.physics.buildingSpeedPenalty : 0.5) : 1;
             var spdMult = buildPenalty * (items.weapons[this.weaponIndex].spdMult || 1) *
                 (this.skin ? (this.skin.spdMult || 1) : 1) * (this.tail ? (this.tail.spdMult || 1) : 1) * (this.y <= config.snowBiomeTop ?
-                    ((this.skin && this.skin.coldM) ? 1 : config.snowSpeed) : 1) * this.slowMult;
-            if (!this.zIndex && this.y >= (config.mapScale / 2) - (config.riverWidth / 2) &&
+                    ((this.skin && this.skin.coldM) ? 1 : config.snowSpeed) : 1) * this.slowMult *
+                (this.sleighMode ? this.sleighSpeedMultiplier : 1);
+            if (!this.sleighMode && !this.zIndex && this.y >= (config.mapScale / 2) - (config.riverWidth / 2) &&
                 this.y <= (config.mapScale / 2) + (config.riverWidth / 2)) {
                 if (this.skin && this.skin.watrImm) {
                     spdMult *= (config.water ? config.water.immunitySpeedMultiplier : 0.75);

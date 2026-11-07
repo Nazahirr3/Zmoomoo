@@ -1,5 +1,6 @@
 
 import { Player } from "./player.js";
+import { RollingWindowLimiter } from "../libs/network-controls.js";
 
 export class Clan {
 
@@ -8,6 +9,7 @@ export class Clan {
     players = 0xf;
     /** @type {Player} */
     owner = -1;
+    creatorAddress = "";
 
     constructor(title, players, owner) {
 
@@ -92,6 +94,7 @@ export class Clan {
 export class ClanManager {
 
     clans = new Map;
+    creationLimiter = new RollingWindowLimiter(3, 10 * 60 * 1000);
 
     /** @type {Player[]} */
     players = 0xff;
@@ -107,7 +110,17 @@ export class ClanManager {
 
         if (this.clans.has(name)) return false;
 
+        const address = String(player.remoteAddress || "");
+        if ([...this.clans.values()].some(clan => clan.creatorAddress === address)) {
+            return "active_ip_limit";
+        }
+        if (!this.creationLimiter.allow(address)) {
+            player.clanCreateRetryAfter = this.creationLimiter.retryAfter(address);
+            return "rate_limit";
+        }
+
         const clan = new Clan(name, this.players, player);
+        clan.creatorAddress = address;
 
         this.clans.set(name, clan);
         this.server.broadcast("g", {sid: name});

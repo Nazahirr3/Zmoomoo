@@ -84,7 +84,7 @@ var worldSpawnCounts = {
     goldOres: 7
 };
 
-// Animal spawn plan: index (animal type: 0=Cow, 1=Pig, 2=Bull, 3=Bully, 4=Wolf, 5=Bear, 6-8=Bosses),
+// Animal spawn plan: index (animal type: 0-13 existing animals and bosses, 14=Yeti, 15=Boar, 16=Cheetah, 17=Deer, 18=Fox),
 // desired (count to maintain), positions (optional: xRatio/yRatio 0-1 for spawn location)
 var animalSpawnPlan = [{
     index: 0, desired: 2  // Cow
@@ -104,6 +104,22 @@ var animalSpawnPlan = [{
     index: 7, desired: 0, positions: [{ xRatio: 0.18, yRatio: 0.22 }]  // Boss #2
 }, {
     index: 8, desired: 0, positions: [{ xRatio: 0.78, yRatio: 0.64 }]  // Boss #3
+}, {
+    index: 14, desired: 2, positions: [{
+        xRatio: 0.25,
+        yRatio: 0.12
+    }, {
+        xRatio: 0.75,
+        yRatio: 0.12
+    }]  // Yeti (snow biome)
+}, {
+    index: 15, desired: 3  // Boar
+}, {
+    index: 16, desired: 2  // Cheetah
+}, {
+    index: 17, desired: 4  // Deer
+}, {
+    index: 18, desired: 3  // Fox
 }];
 
 // Main game configuration

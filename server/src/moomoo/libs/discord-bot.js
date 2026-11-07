@@ -411,6 +411,17 @@ function getOption(interaction, name) {
     return interaction.data?.options?.find(option => option.name === name)?.value;
 }
 
+function summarizeCommandOptions(options) {
+    if (!Array.isArray(options)) return "";
+    return options.map(option => {
+        if (Array.isArray(option.options)) {
+            const nested = summarizeCommandOptions(option.options);
+            return nested ? `${option.name} ${nested}` : option.name;
+        }
+        return option.name;
+    }).join(", ").slice(0, 850);
+}
+
 function createPrivateAdminClient(options = {}) {
     const baseUrl = options.baseUrl || `http://127.0.0.1:${process.env.PORT || 3000}`;
     const apiKey = options.apiKey || process.env.ADMIN_API_KEY;
@@ -651,6 +662,23 @@ export function startDiscordBot(options = {}) {
                     .catch(error => console.error("[discord] Could not register commands:", error));
             } else if (packet.t === "INTERACTION_CREATE" &&
                 packet.d.type === 2) {
+                const commandName = packet.d.data?.name;
+                if (typeof commandName === "string" && /^[a-z0-9_-]{1,32}$/.test(commandName)) {
+                    const user = packet.d.member?.user || packet.d.user || {};
+                    const actorName = packet.d.member?.nick ||
+                        user.global_name || user.username || "unknown";
+                    const actorId = typeof user.id === "string" ? user.id : "unknown";
+                    const argumentsSummary = summarizeCommandOptions(packet.d.data.options);
+                    try {
+                        options.logCommand?.({
+                            action: `discord_command_${commandName}`,
+                            actor: `${actorName} (${actorId})`,
+                            details: `/${commandName}${argumentsSummary ? ` ${argumentsSummary}` : ""}`
+                        });
+                    } catch (error) {
+                        console.error("[discord] Could not queue command audit log:", error.message);
+                    }
+                }
                 if (packet.d.data?.name === "ping") {
                     replyToInteraction(packet.d, "Pong!")
                         .catch(error => console.error("[discord] Could not reply to /ping:", error));

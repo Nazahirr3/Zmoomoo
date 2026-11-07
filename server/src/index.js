@@ -1,4 +1,5 @@
 import e from "express";
+import { randomBytes } from "node:crypto";
 import { fork, spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
@@ -11,16 +12,28 @@ import { Player } from "./moomoo/modules/player.js";
 import { items } from "./moomoo/modules/items.js";
 import { UTILS } from "./moomoo/libs/utils.js";
 import { hats, accessories } from "./moomoo/modules/store.js";
-import { filter_chat, getMuteDuration, formatMuteDuration, handleDevCommand, getChatViolation, isSevereAcrossMessages, normalizeMessage, resetMuteStateIfNeeded } from "./moomoo/libs/filterchat.js";
+import { filter_chat, getMuteDuration, formatMuteDuration, parseMuteDuration, handleDevCommand, getChatViolation, isSevereAcrossMessages, normalizeMessage, resetMuteStateIfNeeded } from "./moomoo/libs/filterchat.js";
 import { parseClientPacket } from "./network/packetUtils.js";
 import { createAccountStore } from "./moomoo/libs/account-store.js";
 import { createJoinTokenService, registerAccountApi } from "./moomoo/libs/account-api.js";
 import { getDiscordStaffRoles } from "./moomoo/libs/discord-role.js";
 import { startDiscordBot } from "./moomoo/libs/discord-bot.js";
 import { registerPrivateAdminApi } from "./moomoo/libs/private-admin-api.js";
+import { createIpBlockList, getClientAddress, isAddressInBlockList, normalizeIpAddress, RollingWindowLimiter } from "./moomoo/libs/network-controls.js";
+import { createModerationLogger, queueModerationLog } from "./moomoo/libs/moderation-log.js";
 import { config } from "./moomoo/config.js";
 import { ConnectionLimit } from "./moomoo/libs/limit.js";
 import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const REPO_ROOT = path.resolve(__dirname, "../..");
+const ROOT_ENV_FILE = path.resolve(__dirname, "../../.env");
+const SERVER_ENV_FILE = path.resolve(__dirname, "../.env");
+if (typeof process.loadEnvFile === "function") {
+    if (fs.existsSync(ROOT_ENV_FILE)) process.loadEnvFile(ROOT_ENV_FILE);
+    if (SERVER_ENV_FILE !== ROOT_ENV_FILE && fs.existsSync(SERVER_ENV_FILE)) process.loadEnvFile(SERVER_ENV_FILE);
+}
 
 const app = e();
 const publicRateLimit = rateLimit({
@@ -33,7 +46,11 @@ const publicRateLimit = rateLimit({
 
 app.use(e.json()); // Add JSON body parser for API requests 
 
-const colimit = new ConnectionLimit(4);
+const MAX_CONNECTIONS_PER_IP = Number(process.env.MAX_CONNECTIONS_PER_IP || 4);
+if (!Number.isSafeInteger(MAX_CONNECTIONS_PER_IP) || MAX_CONNECTIONS_PER_IP < 1) {
+    throw new Error("MAX_CONNECTIONS_PER_IP must be a positive integer.");
+}
+const colimit = new ConnectionLimit(MAX_CONNECTIONS_PER_IP);
 
 const server = createServer(app);
 const wss = new WebSocketServer({
@@ -42,15 +59,6 @@ const wss = new WebSocketServer({
 });
 
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const REPO_ROOT = path.resolve(__dirname, "../..");
-const ROOT_ENV_FILE = path.resolve(__dirname, "../../.env");
-const SERVER_ENV_FILE = path.resolve(__dirname, "../.env");
-if (typeof process.loadEnvFile === "function") {
-    if (fs.existsSync(ROOT_ENV_FILE)) process.loadEnvFile(ROOT_ENV_FILE);
-    if (SERVER_ENV_FILE !== ROOT_ENV_FILE && fs.existsSync(SERVER_ENV_FILE)) process.loadEnvFile(SERVER_ENV_FILE);
-}
 const CLIENT_DIST_DIR = path.resolve(__dirname, "../../dist/client");
 const UPDATE_CLIENT_DIST_DIR = path.resolve(__dirname, `../../dist/.client-update-${process.pid}`);
 const INDEX = path.join(CLIENT_DIST_DIR, "html/play.html");
@@ -59,11 +67,16 @@ const HOST = process.env.HOST ?? "0.0.0.0";
 const SERVER_START_TIME = Date.now();
 const CLAN_CREATE_COOLDOWN = 20 * 1000;
 const CHAT_MUTE_STORE = new Map();
-const JOIN_ATTEMPTS = new Map();
+const JOIN_ATTEMPTS = new RollingWindowLimiter(10, 60 * 1000);
+const proxyVpnRanges = createIpBlockList(process.env.PROXY_VPN_CIDRS || "");
+const logModerationAction = createModerationLogger(process.env.MODERATION_LOG_WEBHOOK_URL || "");
 const accountStore = createAccountStore();
 // keep bot moderation behind the signed private api
 registerPrivateAdminApi(app, {
     store: accountStore,
+    logAction: logModerationAction
+        ? event => queueModerationLog(logModerationAction, event)
+        : null,
     disconnectAccount(discordId) {
         for (const player of game.players) {
             const user = player.accountId ? accountStore.getUserById(player.accountId) : null;
@@ -114,30 +127,43 @@ process.on("unhandledRejection", error => {
 });
 
 function isLocalAddress(address) {
-    const value = String(address || "").toLowerCase();
+    const value = normalizeIpAddress(address);
     return value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1";
 }
 
 function allowJoinAttempt(address) {
-    const now = Date.now();
-    const windowMs = 60 * 1000;
-    const attempts = (JOIN_ATTEMPTS.get(address) || []).filter(time => now - time < windowMs);
-    if (attempts.length >= 10) {
-        JOIN_ATTEMPTS.set(address, attempts);
-        return false;
-    }
-    attempts.push(now);
-    JOIN_ATTEMPTS.set(address, attempts);
-    return true;
+    return JOIN_ATTEMPTS.allow(address);
 }
 
 function recordLowSeverityChat(player, now) {
     const windowMs = Number(config.chatShadowMuteWindow) || 10 * 60 * 1000;
     player.lowSeverityChatTimes = (player.lowSeverityChatTimes || []).filter(time => now - time < windowMs);
     player.lowSeverityChatTimes.push(now);
-    if (player.lowSeverityChatTimes.length >= (Number(config.chatShadowMuteCount) || 3)) {
+    if (player.lowSeverityChatTimes.length >= (Number(config.chatShadowMuteCount) || 3) &&
+        player.shadowMuteUntil <= now) {
         player.shadowMuteUntil = now + windowMs;
+        queueModerationLog(logModerationAction, {
+            action: "automatic_shadow_mute",
+            actor: "server",
+            actorHasAccount: false,
+            target: formatServerIdentity(player),
+            targetHasAccount: Boolean(player.accountId),
+            details: `Repeated low-severity chat violations for ${Math.ceil(windowMs / 60000)} minute(s).`
+        });
     }
+}
+
+function formatServerIdentity(player) {
+    return `${player.name || "unknown"} (Server ID: ${player.gameId || "unknown"})`;
+}
+
+function logGameCommand(player, commandText) {
+    queueModerationLog(logModerationAction, {
+        action: "game_command",
+        actor: formatServerIdentity(player),
+        actorHasAccount: Boolean(player.accountId),
+        details: String(commandText).slice(0, 1000)
+    });
 }
 
 function getChatMuteKey(player, addr) {
@@ -165,10 +191,16 @@ function getChatMuteKey(player, addr) {
 
 function getChatMuteState(player, addr) {
     const key = getChatMuteKey(player, addr);
-    const state = CHAT_MUTE_STORE.get(key) || { offenseCount: 0, lastOffenseAt: 0, muteUntil: 0 };
+    const state = CHAT_MUTE_STORE.get(key) || {
+        offenseCount: 0,
+        lastOffenseAt: 0,
+        muteUntil: 0,
+        muteReason: "no reason given"
+    };
     player.offenseCount = Number(state.offenseCount) || 0;
     player.lastOffenseAt = Number(state.lastOffenseAt) || 0;
     player.muteUntil = Number(state.muteUntil) || 0;
+    player.muteReason = state.muteReason || "no reason given";
     player.shadowMuteUntil = Number(state.shadowMuteUntil) || 0;
     player.lowSeverityChatTimes = Array.isArray(state.lowSeverityChatTimes) ? state.lowSeverityChatTimes : [];
     resetMuteStateIfNeeded(player);
@@ -176,6 +208,7 @@ function getChatMuteState(player, addr) {
         offenseCount: player.offenseCount,
         lastOffenseAt: player.lastOffenseAt,
         muteUntil: player.muteUntil,
+        muteReason: player.muteReason || "no reason given",
         shadowMuteUntil: player.shadowMuteUntil,
         lowSeverityChatTimes: player.lowSeverityChatTimes
     };
@@ -189,6 +222,7 @@ function persistChatMuteState(player, addr) {
         offenseCount: Number(player.offenseCount) || 0,
         lastOffenseAt: Number(player.lastOffenseAt) || 0,
         muteUntil: Number(player.muteUntil) || 0,
+        muteReason: player.muteReason || "no reason given",
         shadowMuteUntil: Number(player.shadowMuteUntil) || 0,
         lowSeverityChatTimes: player.lowSeverityChatTimes || []
     };
@@ -485,6 +519,7 @@ startDiscordBot({
     },
     restart: restartGameServer,
     update: updateGameServer,
+    logCommand: event => queueModerationLog(logModerationAction, event),
     moderation: {
         ban(discordId, bannedUntil, reason, executorId) {
             const user = accountStore.banUser(discordId, bannedUntil, reason);
@@ -575,8 +610,10 @@ wss.on("connection", async (socket, req) => {
         return void socket.close();
     }
 
-    const addr = req.socket.remoteAddress;
-    const localConnection = isLocalAddress(req.socket.remoteAddress);
+    const addr = getClientAddress(req, process.env.TRUST_PROXY === "true");
+    const localConnection = isLocalAddress(addr);
+    // This only marks staff-visible risk; it never blocks a connection.
+    const proxyVpnRisk = isAddressInBlockList(addr, proxyVpnRanges);
     if (accountStore.isIpBanned(addr)) {
         return void socket.close(4003, "IP banned");
     }
@@ -584,7 +621,7 @@ wss.on("connection", async (socket, req) => {
     if (
         colimit.check(addr)
     ) {
-        return void socket.close(4001);
+        return void socket.close(4001, "Connection limit");
     }
 
     colimit.up(addr);
@@ -599,6 +636,8 @@ wss.on("connection", async (socket, req) => {
     player.offenseCount = 0;
     player.lastOffenseAt = 0;
     player.muteUntil = 0;
+    player.muteReason = "no reason given";
+    player.chatCooldownDisabled = false;
     player.shadowMuteUntil = 0;
     player.lowSeverityChatTimes = [];
     player.recentChatMessages = [];
@@ -606,6 +645,8 @@ wss.on("connection", async (socket, req) => {
     player.lastChatMessage = "";
     player.joinTokenVerified = false;
     player.accountId = null;
+    player.gameId = randomBytes(12).toString("base64url");
+    player.proxyVpnRisk = proxyVpnRisk;
     player.remoteAddress = addr;
     player.ownerCommandCooldownUntil = 0;
     player.staffHidden = false;
@@ -621,7 +662,8 @@ wss.on("connection", async (socket, req) => {
     player.send("m", {
         muted: player.isMuted(),
         until: player.muteUntil || 0,
-        timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+        timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now())),
+        reason: player.muteReason || "no reason given"
     });
 
     const emit = (type, ...data) => {
@@ -689,6 +731,7 @@ wss.on("connection", async (socket, req) => {
                         return;
                     }
                     player.accountId = Number(user.id);
+                    player.gameId = user.game_id;
                     player.accountUsername = user.username;
                     checkDiscordStaffRoles(player)
                         .then(roles => {
@@ -708,17 +751,22 @@ wss.on("connection", async (socket, req) => {
                         player.lastOffenseAt = Number(punishment.last_offense_at) || 0;
                         player.muteUntil = Number(punishment.muted_until) || 0;
                     }
+                    player.muteReason = player.isMuted()
+                        ? String(punishment.mute_reason || "no reason given")
+                        : "no reason given";
                     CHAT_MUTE_STORE.set(getChatMuteKey(player, addr), {
                         offenseCount: player.offenseCount,
                         lastOffenseAt: player.lastOffenseAt,
                         muteUntil: player.muteUntil,
+                        muteReason: player.muteReason,
                         shadowMuteUntil: 0,
                         lowSeverityChatTimes: []
                     });
                     player.send("m", {
                         muted: player.isMuted(),
                         until: player.muteUntil || 0,
-                        timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+                        timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now())),
+                        reason: player.muteReason
                     });
                 }
 
@@ -728,8 +776,15 @@ wss.on("connection", async (socket, req) => {
                 }
                 player.joinTokenVerified = true;
                 clearTimeout(handshakeTimer);
+                player.send("cd", player.chatCooldownDisabled);
                 player.send("os", game.players
                     .filter(target => target.ownerShown && target.socket?.readyState === 1)
+                    .map(target => target.sid));
+                player.send("sh", game.players
+                    .filter(target => target.shielded && target.socket?.readyState === 1)
+                    .map(target => target.sid));
+                player.send("sl", game.players
+                    .filter(target => target.sleighMode && target.socket?.readyState === 1)
                     .map(target => target.sid));
                 player.send("j");
                 if (activeGlobalAnnouncement) {
@@ -806,7 +861,18 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
+                    if (player.sleighMode) {
+                        player.mouseState = 0;
+                        player.hits = 0;
+                        player.gathering = 0;
+                        break;
+                    }
+
                     player.mouseState = data[0];
+                    if (!data[0]) {
+                        player.hits = 0;
+                        player.gathering = 0;
+                    }
                     if (data[0] && player.buildIndex === -1) {
                         player.hits++;
                     }
@@ -837,16 +903,77 @@ wss.on("connection", async (socket, req) => {
                     break;
 
                 }
+                case "bp": {
+                    if (!player.alive || !player.builderMode ||
+                        !Number.isFinite(data[0]) || !Number.isFinite(data[1])) {
+                        break;
+                    }
+                    player.builderPlaceX = Math.min(config.mapScale, Math.max(0, data[0]));
+                    player.builderPlaceY = Math.min(config.mapScale, Math.max(0, data[1]));
+                    break;
+                }
+                case "bs": {
+                    if (!player.alive || !player.builderMode ||
+                        !Number.isInteger(data[0]) ||
+                        !Number.isFinite(data[1]) || !Number.isFinite(data[2])) {
+                        break;
+                    }
+                    const mobType = game.ai_manager.aiTypes[data[0]];
+                    if (!mobType || (player.builderMobSpawnCooldownUntil || 0) > Date.now()) {
+                        break;
+                    }
+                    const builderMobCount = game.ais.reduce((count, mob) =>
+                        count + (mob.active && mob.builderSpawned ? 1 : 0), 0);
+                    if (builderMobCount >= 100) {
+                        player.send("w", "Builder mob limit reached (100).");
+                        break;
+                    }
+                    const x = Math.min(config.mapScale - mobType.scale,
+                        Math.max(mobType.scale, data[1]));
+                    const y = Math.min(config.mapScale - mobType.scale,
+                        Math.max(mobType.scale, data[2]));
+                    const mob = game.ai_manager.spawn(x, y, 0, data[0], true);
+                    mob.builderSpawnedBySid = player.sid;
+                    player.builderMobSpawnCooldownUntil = Date.now() + 500;
+                    break;
+                }
                 case "K": {
                     if (!player.alive) {
                         break;
                     }
 
+                    if (player.sleighMode) {
+                        player.autoGather = 0;
+                        player.mouseState = 0;
+                        player.hits = 0;
+                        player.gathering = 0;
+                        player.send("ag", false);
+                        break;
+                    }
+
                     if (data[0]) {
-                        player.autoGather = !player.autoGather;
+                        player.autoGather = typeof data[1] === "boolean"
+                            ? data[1]
+                            : !player.autoGather;
+                        if (!player.autoGather) {
+                            player.mouseState = 0;
+                            player.hits = 0;
+                            player.gathering = 0;
+                        }
+                        player.send("ag", Boolean(player.autoGather));
                     }
                     break;
 
+                }
+                case "sw": {
+                    if (!player.alive || !player.sleighMode ||
+                        (data[0] !== -1 && data[0] !== 1)) {
+                        break;
+                    }
+                    player.sleighSpeedMultiplier = Math.max(0.5, Math.min(20,
+                        Math.round((player.sleighSpeedMultiplier + data[0] * 0.25) * 100) / 100));
+                    player.send("sls", player.sleighSpeedMultiplier);
+                    break;
                 }
                 case "D": {
 
@@ -888,8 +1015,10 @@ wss.on("connection", async (socket, req) => {
                     }
 
                     const item = items.list[data[0]];
-
-                    if (!item || !Array.isArray(player.items) || !player.items.includes(data[0])) {
+                    if (!item || !Array.isArray(player.items) ||
+                        (player.builderMode
+                            ? !item.group || !item.group.place || item.consume
+                            : !player.items.includes(data[0]))) {
                         break;
                     }
 
@@ -1041,10 +1170,103 @@ wss.on("connection", async (socket, req) => {
                         break;
                     }
 
-                    const commandMatch = /^\/(owner|players|mute|unmute|show|hide)(?:\s|$)/i.exec(rawText);
+                    const sleighCommandMatch = /^\/sleigh(?:\s|$)/i.exec(rawText);
+                    if (sleighCommandMatch) {
+                        logGameCommand(player, rawText);
+                        const args = rawText.split(/\s+/).slice(1);
+                        const selfTarget = args.length === 0 ||
+                            (args.length === 2 && args[0].toLowerCase() === "no" &&
+                                args[1].toLowerCase() === "id");
+                        if (!selfTarget && (args.length !== 1 || !/^[A-Za-z0-9_-]{16}$/.test(args[0]))) {
+                            player.send("w", "Use /sleigh to toggle your sleigh, or /sleigh <player ID> to toggle another player's sleigh.");
+                            break;
+                        }
+                        if ((player.sleighCommandCooldownUntil || 0) > Date.now()) break;
+                        player.sleighCommandCooldownUntil = Date.now() + 1000;
+                        if (!player.alive) {
+                            player.send("w", "You can only use /sleigh while alive.");
+                            break;
+                        }
+                        if (player.builderMode) {
+                            player.send("w", "Disable Builder mode before using the sleigh.");
+                            break;
+                        }
+                        if (!player.accountId) {
+                            player.send("w", "Sign in and verify your Discord owner or administrator role to use the sleigh command.");
+                            break;
+                        }
+                        const roles = await checkDiscordStaffRoles(player);
+                        updateStaffRoles(player, roles);
+                        if (!roles.owner && !roles.administrator) {
+                            player.send("w", "Only Discord owners and administrators can use the sleigh command.");
+                            break;
+                        }
+                        let target = player;
+                        if (!selfTarget) {
+                            target = game.players.find(value =>
+                                value.gameId === args[0] &&
+                                value.joinTokenVerified &&
+                                value.hasJoinedGame &&
+                                value.alive &&
+                                value.socket?.readyState === 1
+                            );
+                            if (!target) {
+                                player.send("w", "That player ID is not online or is not alive.");
+                                break;
+                            }
+                            if (target.builderMode) {
+                                player.send("w", "That player must disable Builder mode before using the sleigh.");
+                                break;
+                            }
+                        }
+                        target.sleighMode = !target.sleighMode;
+                        target.sleighSpeedMultiplier = 1;
+                        target.autoGather = 0;
+                        target.mouseState = 0;
+                        target.hits = 0;
+                        target.gathering = 0;
+                        if (target.sleighMode) target.dmgOverTime = {};
+                        game.server.broadcast("sl", target.sid, target.sleighMode);
+                        target.send("sls", target.sleighSpeedMultiplier);
+                        target.send("w", target.sleighMode
+                            ? "Sleigh enabled. Scroll up to speed up or down to slow down."
+                            : "Sleigh disabled.");
+                        if (target !== player) {
+                            player.send("w", `Sleigh ${target.sleighMode ? "enabled" : "disabled"} for ${target.name || "that player"}.`);
+                        }
+                        break;
+                    }
+
+                    const clearCommandMatch = /^\/(clear|clearmo)(?:\s|$)/i.exec(rawText);
+                    if (clearCommandMatch) {
+                        const command = clearCommandMatch[1].toLowerCase();
+                        logGameCommand(player, rawText);
+                        const args = rawText.split(/\s+/).slice(1);
+                        if (args.length) {
+                            player.send("w", command === "clear"
+                                ? "Use /clear to destroy your buildings."
+                                : "Use /clearmo to remove the mobs you spawned in Builder mode.");
+                            break;
+                        }
+                        if ((player.clearCommandCooldownUntil || 0) > Date.now()) break;
+                        player.clearCommandCooldownUntil = Date.now() + 1000;
+                        if (command === "clear") {
+                            game.object_manager.removePlayerBuildings(player, game.server);
+                            player.send("w", "All of your buildings have been destroyed.");
+                        } else {
+                            const removed = game.ai_manager.clearBuilderSpawns(player);
+                            player.send("w", removed
+                                ? `Cleared ${removed} Builder-spawned mob${removed === 1 ? "" : "s"}.`
+                                : "You have no Builder-spawned mobs to clear.");
+                        }
+                        break;
+                    }
+
+                    const commandMatch = /^\/(owner|mute|unmute|show|hide|chatcooldown|tp|builder|shield)(?:\s|$)/i.exec(rawText);
                     if (commandMatch) {
                         const command = commandMatch[1].toLowerCase();
                         const args = rawText.trim().split(/\s+/).slice(1);
+                        logGameCommand(player, rawText);
                         if (player.ownerCommandCooldownUntil > Date.now()) break;
                         player.ownerCommandCooldownUntil = Date.now() + 1000;
 
@@ -1064,8 +1286,8 @@ wss.on("connection", async (socket, req) => {
 
                             if (command === "owner") {
                                 player.send("w", roles.administrator && !roles.owner
-                                    ? "Discord administrator role verified. Your name is red, and player account IDs are shown below names."
-                                    : "Discord owner role verified. Your name is orange, and player account IDs are shown below names.");
+                                    ? "Discord administrator role verified. Your name is red. Press Tab for the staff player menu."
+                                    : "Discord owner role verified. Your name is orange. Press Tab for the staff player menu.");
                             } else if (command === "show" || command === "hide") {
                                 player.ownerShown = command === "show";
                                 player.staffHidden = command === "hide";
@@ -1074,67 +1296,200 @@ wss.on("connection", async (socket, req) => {
                                 player.send("w", player.ownerShown
                                     ? `You are now shown as an ${staffLabel} to other players.`
                                     : `You are hidden as an ${staffLabel} from other players.`);
-                            } else if (command === "players") {
-                                const roster = game.players
-                                    .filter(target => target.joinTokenVerified &&
-                                        target.hasJoinedGame &&
-                                        target.socket?.readyState === 1)
-                                    .map(target => [
-                                        target.sid,
-                                        target.name || "unknown",
-                                        target.accountId || null
-                                    ]);
-                                player.send("pl", roster);
+                            } else if (command === "tp") {
+                                const targetId = args[0] || "";
+                                if (args.length !== 1 || !/^[A-Za-z0-9_-]{16}$/.test(targetId)) {
+                                    player.send("w", "Use /tp <player ID>. Press Tab to find player IDs.");
+                                    break;
+                                }
+                                const target = game.players.find(value =>
+                                    value.gameId === targetId &&
+                                    value.joinTokenVerified &&
+                                    value.hasJoinedGame &&
+                                    value.alive &&
+                                    value.socket?.readyState === 1
+                                );
+                                if (!target) {
+                                    player.send("w", "That player ID is not online or is not alive.");
+                                    break;
+                                }
+                                if (target === player ||
+                                    (player.accountId && target.accountId === player.accountId)) {
+                                    player.send("w", "That is your own player ID.");
+                                    break;
+                                }
+                                const x = Math.min(config.mapScale - player.scale,
+                                    Math.max(player.scale, target.x));
+                                const y = Math.min(config.mapScale - player.scale,
+                                    Math.max(player.scale, target.y));
+                                player.x = x;
+                                player.y = y;
+                                player.xVel = 0;
+                                player.yVel = 0;
+                                player.resetMoveDir();
+                                player.send("tp", x, y);
+                                player.send("w", `Teleported to ${target.name}.`);
+                                queueModerationLog(logModerationAction, {
+                                    action: "teleport",
+                                    actor: formatServerIdentity(player),
+                                    actorHasAccount: Boolean(player.accountId),
+                                    target: formatServerIdentity(target),
+                                    targetHasAccount: Boolean(target.accountId)
+                                });
+                            } else if (command === "builder") {
+                                if (args.length) {
+                                    player.send("w", "Use /builder to toggle builder mode.");
+                                    break;
+                                }
+                                if (!player.alive) {
+                                    player.send("w", "Builder mode can only be toggled while alive.");
+                                    break;
+                                }
+                                player.setBuilderMode(!player.builderMode);
+                                player.send("V", player.items, 0);
+                                player.send("bm", player.builderMode);
+                                player.send("w", player.builderMode
+                                    ? "Builder mode enabled. Press Shift+Tab for the building catalog."
+                                    : "Builder mode disabled. Your original inventory has been restored.");
+                            } else if (command === "shield") {
+                                if (args.length) {
+                                    player.send("w", "Use /shield to toggle your shield.");
+                                    break;
+                                }
+                                player.shielded = !player.shielded;
+                                game.server.broadcast("sh", player.sid, player.shielded);
+                                player.send("w", player.shielded
+                                    ? "Shield enabled. Attacks against you will show as invincible!"
+                                    : "Shield disabled.");
+                            } else if (command === "chatcooldown") {
+                                const action = (args[0] || "").toLowerCase();
+                                const targetId = args[1] || "";
+                                if (args.length !== 2 || !["disable", "enable"].includes(action) ||
+                                    !/^[A-Za-z0-9_-]{16}$/.test(targetId)) {
+                                    player.send("w", "Use /chatcooldown <disable|enable> <player ID>. Press Tab to find IDs.");
+                                    break;
+                                }
+                                const target = game.players.find(value =>
+                                    value.gameId === targetId &&
+                                    value.joinTokenVerified &&
+                                    value.hasJoinedGame &&
+                                    value.socket?.readyState === 1
+                                );
+                                if (!target) {
+                                    player.send("w", "That player ID is not online.");
+                                    break;
+                                }
+                                target.chatCooldownDisabled = action === "disable";
+                                target.chat_cooldown = 0;
+                                target.send("cd", target.chatCooldownDisabled);
+                                target.send("w", `Chat cooldown ${action}d for your current session.`);
+                                player.send("w", `Chat cooldown ${action}d for ${target.name} until they disconnect.`);
+                                queueModerationLog(logModerationAction, {
+                                    action: `chatcooldown_${action}`,
+                                    actor: formatServerIdentity(player),
+                                    actorHasAccount: Boolean(player.accountId),
+                                    target: formatServerIdentity(target),
+                                    targetHasAccount: Boolean(target.accountId),
+                                    details: `Cooldown ${action}d for this connection.`
+                                });
                             } else if (command === "mute" || command === "unmute") {
-                                const targetId = /^\d+$/.test(args[0] || "") ? Number(args[0]) : NaN;
-                                const target = Number.isSafeInteger(targetId)
-                                    ? game.players.find(value => value.sid === targetId)
+                                const targetId = args[0] || "";
+                                const target = /^[A-Za-z0-9_-]{16}$/.test(targetId)
+                                    ? game.players.find(value =>
+                                        value.gameId === targetId &&
+                                        value.joinTokenVerified &&
+                                        value.hasJoinedGame &&
+                                        value.socket?.readyState === 1
+                                    )
                                     : null;
-                                if (!target || target === player) {
+                                const invalidArguments = command === "mute"
+                                    ? args.length < 2
+                                    : args.length !== 1;
+                                if (invalidArguments) {
                                     player.send("w", command === "mute"
-                                        ? "Use /mute <player id> <minutes>. Use /players to find IDs."
-                                        : "Use /unmute <player id>. Use /players to find IDs.");
+                                        ? "Use /mute <player ID> <duration> [reason], such as /mute <player ID> 10m spam."
+                                        : "Use /unmute <player id>. Press Tab to find IDs.");
+                                    break;
+                                }
+                                if (!target) {
+                                    player.send("w", "That player ID is not online. Press Tab to find IDs.");
+                                    break;
+                                }
+                                if (target === player ||
+                                    (player.accountId && target.accountId === player.accountId)) {
+                                    player.send("w", "That is your own player ID. Use the target player's ID from the Tab menu.");
                                     break;
                                 }
 
-                                if (command === "mute") {
-                                    const minutes = /^\d+$/.test(args[1] || "") ? Number(args[1]) : NaN;
-                                    if (args.length !== 2 || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 10080) {
-                                        player.send("w", "Mute time must be 1 to 10080 minutes. Example: /mute 3 10");
+                                if (command === "mute" && roles.administrator && !roles.owner && target.accountId) {
+                                    const targetRoles = await checkDiscordStaffRoles(target);
+                                    updateStaffRoles(target, targetRoles);
+                                    if (targetRoles.owner) {
+                                        player.send("w", "Administrators cannot moderate the owner's chat.");
                                         break;
                                     }
+                                }
+
+                                if (command === "mute") {
+                                    const duration = parseMuteDuration(args[1] || "");
+                                    if (!duration || !Number.isSafeInteger(Date.now() + duration)) {
+                                        player.send("w", "Use /mute <player ID> <duration> [reason], such as /mute <player ID> 10m spam.");
+                                        break;
+                                    }
+                                    const reason = args.slice(2).join(" ").replace(/\s+/g, " ").trim().slice(0, 500) ||
+                                        "no reason given";
                                     const now = Date.now();
-                                    target.muteUntil = Math.min(Number.MAX_SAFE_INTEGER, now + minutes * 60 * 1000);
+                                    target.muteUntil = now + duration;
+                                    target.muteReason = reason;
                                     if (target.accountId) {
                                         const punishment = accountStore.getPunishment(target.accountId);
                                         accountStore.savePunishment(
                                             target.accountId,
                                             punishment.offense_count,
                                             punishment.last_offense_at,
-                                            target.muteUntil
+                                            target.muteUntil,
+                                            reason
                                         );
                                     }
                                     persistChatMuteState(target, target.remoteAddress);
                                     target.send("m", {
                                         muted: true,
                                         until: target.muteUntil,
-                                        timeLeft: formatMuteDuration(target.muteUntil - now)
+                                        timeLeft: formatMuteDuration(target.muteUntil - now),
+                                        reason
                                     });
-                                    player.send("w", `Muted ${target.name} (#${target.sid}) for ${minutes}m. Only you can see this confirmation.`);
+                                    player.send("w", `Muted ${target.name} for ${formatMuteDuration(duration)}. Reason: ${reason}.`);
+                                    queueModerationLog(logModerationAction, {
+                                        action: "manual_mute",
+                                        actor: formatServerIdentity(player),
+                                        actorHasAccount: Boolean(player.accountId),
+                                        target: formatServerIdentity(target),
+                                        targetHasAccount: Boolean(target.accountId),
+                                        details: `Duration: ${formatMuteDuration(duration)}\nReason: ${reason}`
+                                    });
                                 } else {
                                     target.muteUntil = 0;
+                                    target.muteReason = "no reason given";
                                     if (target.accountId) {
                                         const punishment = accountStore.getPunishment(target.accountId);
                                         accountStore.savePunishment(
                                             target.accountId,
                                             punishment.offense_count,
                                             punishment.last_offense_at,
-                                            0
+                                            0,
+                                            "no reason given"
                                         );
                                     }
                                     persistChatMuteState(target, target.remoteAddress);
-                                    target.send("m", { muted: false, until: 0, timeLeft: "0m" });
-                                    player.send("w", `Unmuted ${target.name} (#${target.sid}). Only you can see this confirmation.`);
+                                    target.send("m", { muted: false, until: 0, timeLeft: "0m", reason: "" });
+                                    player.send("w", `Unmuted ${target.name}. Only you can see this confirmation.`);
+                                    queueModerationLog(logModerationAction, {
+                                        action: "manual_unmute",
+                                        actor: formatServerIdentity(player),
+                                        actorHasAccount: Boolean(player.accountId),
+                                        target: formatServerIdentity(target),
+                                        targetHasAccount: Boolean(target.accountId)
+                                    });
                                 }
                             }
                         } catch (error) {
@@ -1152,12 +1507,15 @@ wss.on("connection", async (socket, req) => {
                         player.send("m", {
                             muted: true,
                             until: player.muteUntil || 0,
-                            timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+                            timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now())),
+                            reason: player.muteReason || "no reason given"
                         });
                         break;
                     }
 
-                    if (config.chatCooldownEnabled !== false && player.chat_cooldown > 0) {
+                    if (config.chatCooldownEnabled !== false &&
+                        !player.chatCooldownDisabled &&
+                        player.chat_cooldown > 0) {
                         break;
                     }
 
@@ -1171,14 +1529,15 @@ wss.on("connection", async (socket, req) => {
                             player.send("m", {
                                 muted: player.isMuted(),
                                 until: player.muteUntil || 0,
-                                timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now()))
+                                timeLeft: formatMuteDuration(Math.max(0, (player.muteUntil || 0) - Date.now())),
+                                reason: player.muteReason || "no reason given"
                             });
                             break;
                         }
                     }
 
                     const now = Date.now();
-                    player.chat_cooldown = config.chatCooldownEnabled !== false ?
+                    player.chat_cooldown = config.chatCooldownEnabled !== false && !player.chatCooldownDisabled ?
                         (config.chatCooldown || 1300) : 0;
                     const filterOptions = {
                         enabled: config.chatFilterEnabled !== false,
@@ -1201,20 +1560,32 @@ wss.on("connection", async (socket, req) => {
                         player.offenseCount = record.offenseCount;
                         player.lastOffenseAt = record.lastOffenseAt;
                         player.muteUntil = Math.min(Number.MAX_SAFE_INTEGER, now + getMuteDuration(record.offenseCount));
+                        player.muteReason = "automatic chat filter violation";
                         record.muteUntil = player.muteUntil;
+                        record.muteReason = player.muteReason;
                         CHAT_MUTE_STORE.set(getChatMuteKey(player, addr), record);
                         if (player.accountId) {
                             accountStore.savePunishment(
                                 player.accountId,
                                 record.offenseCount,
                                 record.lastOffenseAt,
-                                record.muteUntil
+                                record.muteUntil,
+                                player.muteReason
                             );
                         }
+                        queueModerationLog(logModerationAction, {
+                            action: "automatic_chat_mute",
+                            actor: "server",
+                            actorHasAccount: false,
+                            target: formatServerIdentity(player),
+                            targetHasAccount: Boolean(player.accountId),
+                            details: `Severe chat violation ${record.offenseCount}; muted for ${formatMuteDuration(player.muteUntil - now)}.`
+                        });
                         player.send("m", {
                             muted: true,
                             until: player.muteUntil,
-                            timeLeft: formatMuteDuration(player.muteUntil - now)
+                            timeLeft: formatMuteDuration(player.muteUntil - now),
+                            reason: player.muteReason
                         });
                         break;
                     }
@@ -1268,6 +1639,33 @@ wss.on("connection", async (socket, req) => {
                 }
                 case "0": {
                     emit("0");
+                    if (data[0] !== "roster" || !player.accountId ||
+                        (player.playerRosterCooldownUntil || 0) > Date.now()) {
+                        break;
+                    }
+                    player.playerRosterCooldownUntil = Date.now() + 1000;
+                    try {
+                        const roles = await checkDiscordStaffRoles(player);
+                        updateStaffRoles(player, roles);
+                        if (!roles.owner && !roles.administrator) break;
+
+                        const roster = game.players
+                            .filter(target => target.joinTokenVerified &&
+                                target.hasJoinedGame &&
+                                target !== player &&
+                                target.socket?.readyState === 1)
+                            .map(target => [
+                                target.sid,
+                                target.name || "unknown",
+                                Boolean(target.accountId),
+                                target.gameId,
+                                Boolean(target.proxyVpnRisk)
+                            ]);
+                        player.send("pl", roster);
+                    } catch (error) {
+                        console.error("[staff] Player roster request failed:", error.message);
+                        player.send("w", "Unable to load the player list right now.");
+                    }
                     break;
                 }
                 case "p": {
@@ -1307,8 +1705,12 @@ wss.on("connection", async (socket, req) => {
                     if (player.clan_cooldown > 0) break;
 
                     const created = game.clan_manager.create(data[0], player);
-                    if (created) {
+                    if (created === true) {
                         player.clan_create_cooldown_until = Date.now() + CLAN_CREATE_COOLDOWN;
+                    } else if (created === "active_ip_limit") {
+                        player.send("w", "Someone using your IP already owns a custom team. They must leave it before another can be created.");
+                    } else if (created === "rate_limit") {
+                        player.send("cl", player.clanCreateRetryAfter);
                     }
 
                     break;
@@ -1418,9 +1820,16 @@ wss.on("connection", async (socket, req) => {
         clearTimeout(handshakeTimer);
         colimit.down(addr);
         recordAccountMatch(player, false);
+        if (player.builderMode) player.setBuilderMode(false);
+        player.chatCooldownDisabled = false;
+        player.chat_cooldown = 0;
         if (player.ownerShown) {
             game.server.broadcast("os", player.sid, false);
             player.ownerShown = false;
+        }
+        if (player.shielded) {
+            player.shielded = false;
+            game.server.broadcast("sh", player.sid, false);
         }
 
         if (player.team) {

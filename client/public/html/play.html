@@ -544,7 +544,7 @@
         <div id="chatHolder" style="display:none">
             <div id="chatRosterTitle">Players</div>
             <div id="chatRoster" style="display:none"></div>
-            <input id="chatBox" placeholder="Enter Message" maxlength="30" style="opacity: 1; width: 220px; max-width: 90vw; display:block; margin:0 auto; text-align:left; padding:6px 12px;">
+            <input id="chatBox" placeholder="Enter Message" maxlength="300" style="opacity: 1; width: 220px; max-width: 90vw; display:block; margin:0 auto; text-align:left; padding:6px 12px;">
             <button id="chatRosterClose" type="button">Close</button>
         </div>
         <div id="upgradeHolder"></div>
@@ -594,12 +594,16 @@
                 style="font-size:40px;vertical-align:middle">&#xE8AF;</i></div><canvas id="mapDisplay"></canvas>
          <div id="pingDisplay">Ping <span id="pingValue">0</span>ms</div>
         <div id="storeMenu">
-            <div style="padding-bottom:15px">
+             <div id="storeTabs" style="padding-bottom:15px">
                 <div class="storeTab" style="margin-right:10px" onclick="changeStoreIndex(0)">Hats</div>
                 <div class="storeTab" onclick="changeStoreIndex(1)">Accessories</div>
             </div>
-            <div id="storeHolder"></div>
-        </div>
+             <div id="builderStoreTabs" style="padding-bottom:15px">
+                 <div class="storeTab active" style="margin-right:10px" onclick="changeBuilderTab(0)">Buildings</div>
+                 <div class="storeTab" onclick="changeBuilderTab(1)">Mobs</div>
+             </div>
+             <div id="storeHolder"></div>
+         </div>
         <div id="allianceMenu">
             <div id="allianceHolder"></div>
             <div id="allianceManager"></div>

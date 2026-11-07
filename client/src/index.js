@@ -7,6 +7,7 @@
     if (typeof proc.env !== "object" || proc.env === null) {
         proc.env = {};
     }
+
     if (!Array.isArray(proc.argv)) {
         proc.argv = [];
     }
@@ -121,6 +122,13 @@ function connectSocket() {
         "own": updateOwnerStatus,
         "oid": updateOwnerRoster,
         "os": updateShownOwners,
+        "sh": updateShieldState,
+        "sl": updateSleighState,
+        "sls": updateSleighSpeed,
+        "cd": receiveChatCooldownDisabled,
+        "ag": receiveAutoGatherState,
+        "tp": teleportSelf,
+        "bm": receiveBuilderMode,
         "pl": receivePlayersList,
         "D": addPlayer,
         "E": removePlayer,
@@ -156,6 +164,7 @@ function connectSocket() {
         "m": receiveMuteState,
         "w": receivePrivateMessage,
         "8": showText,
+        "iv": showInvincibleText,
         "gm": showGlobalAnnouncement,
         "9": pingMap,
         "0": pingSocketResponse
@@ -249,7 +258,10 @@ var ais = [];
 var players = [];
 var ownerAccountIds = Object.create(null);
 var shownOwnerIds = Object.create(null);
+var shieldedPlayerIds = Object.create(null);
 var hasOwnerTools = false;
+var builderMode = false;
+var autoGatherEnabled = false;
 var currentStaffRole = null;
 var alliances = [];
 var gameObjects = [];
@@ -283,6 +295,12 @@ var attackingTouch = {
     currentY: 0
 };
 var camX, camY;
+var cameraZoom = 1;
+var BUILDER_DEFAULT_ZOOM = 0.8;
+var MIN_CAMERA_ZOOM = 0.5;
+var MAX_CAMERA_ZOOM = 2.5;
+var worldViewWidth = config.maxScreenWidth;
+var worldViewHeight = config.maxScreenHeight;
 var tmpDir;
 var skinColor = 0;
 var maxScreenWidth = config.maxScreenWidth;
@@ -441,6 +459,7 @@ mapDisplay.width = 300;
 mapDisplay.height = 300;
 var storeMenu = document.getElementById("storeMenu");
 var storeHolder = document.getElementById("storeHolder");
+var builderStoreTabs = document.getElementById("builderStoreTabs");
 var notificationDisplay = document.getElementById("notificationDisplay");
 var hats = store.hats;
 var accessories = store.accessories;
@@ -499,6 +518,64 @@ function updateShownOwners(sid, shown) {
     } else {
         delete shownOwnerIds[sid];
     }
+}
+
+function updateShieldState(sid, enabled) {
+    if (Array.isArray(sid)) {
+        shieldedPlayerIds = Object.create(null);
+        for (var i = 0; i < sid.length; i++) {
+            if (Number.isSafeInteger(sid[i])) shieldedPlayerIds[sid[i]] = true;
+        }
+        return;
+    }
+    if (!Number.isSafeInteger(sid)) return;
+    if (enabled) {
+        shieldedPlayerIds[sid] = true;
+    } else {
+        delete shieldedPlayerIds[sid];
+    }
+}
+
+var sleighPlayerIds = Object.create(null);
+
+function updateSleighState(sid, enabled) {
+    if (Array.isArray(sid)) {
+        sleighPlayerIds = Object.create(null);
+        for (var i = 0; i < sid.length; i++) {
+            if (Number.isSafeInteger(sid[i])) sleighPlayerIds[sid[i]] = true;
+        }
+        for (var i = 0; i < players.length; i++) {
+            players[i].sleighMode = Boolean(sleighPlayerIds[players[i].sid]);
+        }
+        if (player && player.sleighMode) {
+            cameraZoom = 1;
+        }
+        return;
+    }
+    if (!Number.isSafeInteger(sid)) return;
+    if (enabled) {
+        sleighPlayerIds[sid] = true;
+    } else {
+        delete sleighPlayerIds[sid];
+    }
+    var sleighPlayer = findPlayerBySID(sid);
+    if (sleighPlayer) {
+        sleighPlayer.sleighMode = Boolean(enabled);
+        if (sleighPlayer === player) {
+            cameraZoom = enabled ? 1 : (builderMode ? BUILDER_DEFAULT_ZOOM : 1);
+        }
+        if (sleighPlayer === player && enabled) {
+            attackState = 0;
+            autoGatherEnabled = false;
+        }
+    }
+}
+
+function updateSleighSpeed(multiplier) {
+    if (!player || !Number.isFinite(multiplier)) return;
+    player.sleighSpeedMultiplier = multiplier;
+    textManager.showText(player.x, player.y - player.scale * 2, 50, 0.18, 600,
+        "Sleigh speed: " + multiplier.toFixed(2) + "x", "#fff");
 }
 
 function renderLeaderboardList(target, entries, start) {
@@ -573,13 +650,73 @@ function updateChatRosterSize() {
     }
 }
 
+function copyPlayerId(gameId, element) {
+    function showStatus(text) {
+        var originalText = element.textContent;
+        element.textContent = text;
+        window.setTimeout(function () {
+            if (element.textContent === text) element.textContent = originalText;
+        }, 1200);
+    }
+
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(gameId).then(function () {
+            showStatus("Copied!");
+        }).catch(function () {
+            copyPlayerIdWithFallback(gameId, function () {
+                showStatus("Copied!");
+            }, function () {
+                showStatus("Copy failed");
+            });
+        });
+        return;
+    }
+    copyPlayerIdWithFallback(gameId, function () {
+        showStatus("Copied!");
+    }, function () {
+        showStatus("Copy failed");
+    });
+}
+
+function copyPlayerIdWithFallback(gameId, onCopied, onFailure) {
+    var input = document.createElement("textarea");
+    input.value = gameId;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    document.body.appendChild(input);
+    input.select();
+    var copied = false;
+    try {
+        copied = typeof document.execCommand === "function" && document.execCommand("copy");
+    } catch (error) {
+        copied = false;
+    }
+    input.remove();
+    if (copied) onCopied();
+    else onFailure();
+}
+
+function createCopyPlayerIdHandler(gameId, element) {
+    return function (event) {
+        event.stopPropagation();
+        copyPlayerId(gameId, element);
+    };
+}
+
 function receivePlayersList(data) {
     if (!hasOwnerTools || !Array.isArray(data)) return;
     var entries = data.filter(function (entry) {
         return Array.isArray(entry) && Number.isSafeInteger(entry[0]) &&
             typeof entry[1] === "string";
     }).map(function (entry) {
-        return [entry[0], entry[1], entry[2] ? String(entry[2]) : null];
+        return [
+            entry[0],
+            entry[1],
+            entry[2] === true,
+            typeof entry[3] === "string" && /^[A-Za-z0-9_-]{16}$/.test(entry[3]) ? entry[3] : "",
+            entry[4] === true
+        ];
     });
     UTILS.removeAllChildren(chatRoster);
     chatRosterLongestText = 0;
@@ -593,9 +730,36 @@ function receivePlayersList(data) {
         row.className = "chatRosterEntry";
         var label = document.createElement("span");
         label.className = "chatRosterLabel";
-        label.textContent = "#" + entry[0] + " " + (entry[1] || "unknown") +
-            " (account " + (entry[2] ? "yes" : "no") + ")";
+        label.textContent = (entry[1] || "unknown");
+        var accountStatus = document.createElement("span");
+        accountStatus.className = "chatRosterAccountStatus " +
+            (entry[2] ? "hasAccount" : "noAccount");
+        accountStatus.textContent = entry[2] ? "Account: YES" : "Account: NO";
+        accountStatus.setAttribute("aria-label", entry[2]
+            ? "Player has an account"
+            : "Player does not have an account");
         row.appendChild(label);
+        row.appendChild(accountStatus);
+        if (entry[3]) {
+            var idLabel = document.createElement("span");
+            idLabel.className = "chatRosterIdLabel";
+            var idButton = document.createElement("button");
+            idButton.type = "button";
+            idButton.className = "chatRosterPlayerId";
+            idButton.textContent = entry[3];
+            idButton.title = "Click to copy server ID";
+            idButton.setAttribute("aria-label", "Copy server ID " + entry[3]);
+            idButton.addEventListener("click", createCopyPlayerIdHandler(entry[3], idButton));
+            idLabel.appendChild(document.createTextNode("Server ID "));
+            idLabel.appendChild(idButton);
+            row.appendChild(idLabel);
+        }
+        if (entry[4]) {
+            var riskLabel = document.createElement("span");
+            riskLabel.className = "chatRosterRiskLabel";
+            riskLabel.textContent = "Proxy/VPN range match";
+            row.appendChild(riskLabel);
+        }
         var targetRole = ownerAccountIds[entry[0]] && ownerAccountIds[entry[0]].role;
         var canManageTarget = entry[0] != playerSID &&
             !(currentStaffRole === "administrator" && targetRole === "owner");
@@ -745,6 +909,8 @@ gameCanvas.oncontextmenu = function () {
 
 function disconnect(reason) {
     connected = false;
+    playerChatCooldownDisabled = false;
+    chatCooldownUntil = 0;
     io.close();
     if (typeof reason === "string" && reason.indexOf("Your username has been flagged as inappropriate") !== -1) {
         inGame = false;
@@ -758,6 +924,10 @@ function disconnect(reason) {
     menuCardHolder.style.display = "none";
     diedText.style.display = "none";
     loadingText.style.display = "none";
+    if (reason === "Connection limit") {
+        showGenericError("Connection limit", "You have too many tabs open. Close one to play.", "reload");
+        return;
+    }
     var errorMessage = reason === "Invalid Connection"
         ? "The server rejected the connection. Please refresh and try again."
         : reason === "Socket error"
@@ -1542,6 +1712,33 @@ function renderMinimap(delta) {
 }
 
 var currentStoreIndex = 0;
+var currentBuilderTab = 0;
+var selectedBuilderMob = null;
+var lastBuilderPlacementTime = 0;
+var lastBuilderMobSpawnTime = 0;
+
+function changeBuilderTab(index) {
+    currentBuilderTab = index === 1 ? 1 : 0;
+    selectedBuilderMob = null;
+    updateBuilderTabs();
+    generateStoreList();
+}
+
+function updateBuilderTabs() {
+    if (!builderStoreTabs) return;
+    var tabs = builderStoreTabs.querySelectorAll(".storeTab");
+    for (var i = 0; i < tabs.length; i++) {
+        tabs[i].classList.toggle("active", i === currentBuilderTab);
+    }
+}
+
+function getBuilderMobName(type) {
+    if (type.name) return type.name;
+    if (type.id === 0) return "Cow";
+    if (type.id === 1) return "Pig";
+    if (type.id === 9) return "Sheep";
+    return "Mob " + (type.id + 1);
+}
 
 function changeStoreIndex(index) {
     if (currentStoreIndex != index) {
@@ -1551,9 +1748,14 @@ function changeStoreIndex(index) {
     updateStoreTabs();
 }
 
+function isStoreMenuOpen() {
+    return storeMenu.style.display !== "none" &&
+        window.getComputedStyle(storeMenu).display !== "none";
+}
+
 function toggleStoreMenu() {
-    if (storeMenu.style.display != "block") {
-        storeMenu.style.display = "block";
+    if (!isStoreMenuOpen()) {
+        storeMenu.style.display = builderMode ? "flex" : "block";
         allianceMenu.style.display = "none";
         closeChat();
         generateStoreList();
@@ -1577,7 +1779,7 @@ function updateStoreItems(type, id, index) {
             player.skinIndex = id;
         }
     }
-    if (storeMenu.style.display == "block") {
+    if (isStoreMenuOpen()) {
         generateStoreList();
     }
 }
@@ -1597,6 +1799,75 @@ function updateStoreTabs() {
 function generateStoreList() {
     if (player) {
         UTILS.removeAllChildren(storeHolder);
+        if (builderMode) {
+            UTILS.generateElement({
+                class: "builderCatalogTitle",
+                text: currentBuilderTab === 0
+                    ? "Select a building to place"
+                    : selectedBuilderMob === null
+                        ? "Select a mob, then click the world to spawn it"
+                        : "Selected: " + getBuilderMobName(aiManager.aiTypes[selectedBuilderMob]) + " - click the world to spawn",
+                parent: storeHolder
+            });
+            if (currentBuilderTab === 0) {
+                items.list.forEach(function (item) {
+                    if (!item.group || !item.group.place || item.consume) return;
+                    var entry = UTILS.generateElement({
+                        class: "builderCatalogItem",
+                        title: item.name,
+                        onclick: function () {
+                            selectedBuilderMob = null;
+                            selectToBuild(item.id);
+                            storeMenu.style.display = "none";
+                        },
+                        parent: storeHolder
+                    });
+                    UTILS.hookTouchEvents(entry, true);
+                    var icon = getItemSprite(item, true);
+                    UTILS.generateElement({
+                        tag: "img",
+                        class: "builderCatalogIcon",
+                        src: icon.toDataURL(),
+                        alt: item.name,
+                        parent: entry
+                    });
+                    UTILS.generateElement({
+                        tag: "span",
+                        text: item.name,
+                        parent: entry
+                    });
+                });
+            } else {
+                aiManager.aiTypes.forEach(function (type) {
+                    var mobName = getBuilderMobName(type);
+                    var entry = UTILS.generateElement({
+                        class: "builderCatalogItem builderMobItem" +
+                            (selectedBuilderMob === type.id ? " selected" : ""),
+                        title: mobName,
+                        onclick: function () {
+                            selectedBuilderMob = type.id;
+                            storeMenu.style.display = "none";
+                            generateStoreList();
+                        },
+                        parent: storeHolder
+                    });
+                    UTILS.hookTouchEvents(entry, true);
+                    UTILS.generateElement({
+                        tag: "img",
+                        class: "builderCatalogIcon",
+                        src: ".././img/animals/" + type.src + ".png",
+                        alt: mobName,
+                        parent: entry
+                    });
+                    UTILS.generateElement({
+                        tag: "span",
+                        text: mobName,
+                        parent: entry
+                    });
+                });
+            }
+            return;
+        }
         var index = currentStoreIndex;
         var tmpArray = index ? accessories : hats;
         for (var i = 0; i < tmpArray.length; ++i) {
@@ -1915,6 +2186,34 @@ function updateItems(data, wpn) {
     }
 }
 
+function receiveBuilderMode(enabled) {
+    builderMode = Boolean(enabled);
+    if (builderMode) {
+        if (!player || !player.sleighMode) cameraZoom = BUILDER_DEFAULT_ZOOM;
+        autoGatherEnabled = false;
+        attackState = 0;
+        currentBuilderTab = 0;
+        selectedBuilderMob = null;
+        storeMenu.classList.add("builder-mode");
+        builderStoreTabs.style.display = "block";
+        updateBuilderTabs();
+        storeMenu.style.display = "flex";
+        allianceMenu.style.display = "none";
+        closeChat();
+        generateStoreList();
+    } else {
+        if (!player || !player.sleighMode) cameraZoom = 1;
+        storeMenu.classList.remove("builder-mode");
+        builderStoreTabs.style.display = "none";
+        storeMenu.style.display = "none";
+        selectedBuilderMob = null;
+    }
+}
+
+function receiveAutoGatherState(enabled) {
+    autoGatherEnabled = Boolean(enabled);
+}
+
 function setUseNativeResolution(useNative) {
     useNativeResolution = useNative;
     pixelDensity = useNative ? (window.devicePixelRatio || 1) : 1;
@@ -1963,7 +2262,9 @@ function selectSkinColor(index) {
 var chatBox = document.getElementById("chatBox");
 var chatHolder = document.getElementById("chatHolder");
 var chatMuteUntil = 0;
+var chatMuteReason = "no reason given";
 var chatCooldownUntil = 0;
+var playerChatCooldownDisabled = false;
 var chatUiTimer = null;
 var chatMeasureContext = document.createElement("canvas").getContext("2d");
 var CHAT_COOLDOWN_ENABLED = config.chatCooldownEnabled !== false;
@@ -2058,7 +2359,8 @@ function updateChatMuteUI() {
     var now = Date.now();
     var muted = chatMuteUntil > now;
     var cooldownLeft = Math.max(0, chatCooldownUntil - now);
-    var onCooldown = CHAT_COOLDOWN_ENABLED && cooldownLeft > 0 && !muted;
+    var onCooldown = CHAT_COOLDOWN_ENABLED && !playerChatCooldownDisabled &&
+        cooldownLeft > 0 && !muted;
 
     if (!muted && chatMuteUntil > 0 && chatMuteUntil <= now) {
         chatMuteUntil = 0;
@@ -2070,7 +2372,8 @@ function updateChatMuteUI() {
     chatBox.style.cursor = (muted || onCooldown) ? "not-allowed" : "text";
 
     if (muted) {
-        var muteText = "You're muted for " + formatMuteDuration(Math.max(0, chatMuteUntil - now));
+        var muteText = "You're muted for " + formatMuteDuration(Math.max(0, chatMuteUntil - now)) +
+            ". Reason: " + (chatMuteReason || "no reason given");
         chatBox.value = muteText;
         chatBox.placeholder = "";
         chatBox.style.color = "rgba(255,255,255,0.7)";
@@ -2112,11 +2415,38 @@ function receiveMuteState(data) {
     }
     if (payload && typeof payload === "object") {
         chatMuteUntil = Number(payload.until) || 0;
+        chatMuteReason = chatMuteUntil > Date.now()
+            ? String(payload.reason || "no reason given")
+            : "no reason given";
     } else {
         chatMuteUntil = Number(payload) || 0;
+        chatMuteReason = chatMuteUntil > Date.now() ? "no reason given" : "";
     }
     persistMuteState();
     updateChatMuteUI();
+}
+
+function receiveChatCooldownDisabled(data) {
+    var payload = Array.isArray(data) ? data[0] : data;
+    playerChatCooldownDisabled = payload === true;
+    chatCooldownUntil = 0;
+    updateChatMuteUI();
+}
+
+function teleportSelf(x, y) {
+    if (!player || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    player.x = x;
+    player.y = y;
+    player.x1 = x;
+    player.y1 = y;
+    player.x2 = x;
+    player.y2 = y;
+    player.t1 = Date.now();
+    player.t2 = player.t1;
+    player.dt = 0;
+    player.forcePos = true;
+    camX = x;
+    camY = y;
 }
 
 function receivePrivateMessage(message) {
@@ -2132,7 +2462,9 @@ function setChatFilterEnabled(enabled) {
 
 function toggleChat() {
     if (chatHolder.style.display == "block") {
-        if (chatMuteUntil <= Date.now() && (!CHAT_COOLDOWN_ENABLED || chatCooldownUntil <= Date.now()) && !chatBox.disabled && chatBox.value) {
+        if (chatMuteUntil <= Date.now() &&
+            (!CHAT_COOLDOWN_ENABLED || playerChatCooldownDisabled || chatCooldownUntil <= Date.now()) &&
+            !chatBox.disabled && chatBox.value) {
             sendChat(chatBox.value);
         }
         closeChat();
@@ -2169,17 +2501,43 @@ function sendChat(message) {
         updateChatMuteUI();
         return;
     }
-    if (CHAT_COOLDOWN_ENABLED && chatCooldownUntil > Date.now()) {
+    var command = /^\/(?:owner|mute|unmute|show|hide|chatcooldown|tp|builder|clear|clearmo|shield|sleigh)(?:\s|$)/i
+        .test(message.trim());
+    if (!command && CHAT_COOLDOWN_ENABLED && !playerChatCooldownDisabled &&
+        chatCooldownUntil > Date.now()) {
         updateChatMuteUI();
         return;
     }
-    chatCooldownUntil = CHAT_COOLDOWN_ENABLED ? Date.now() + CHAT_COOLDOWN_MS : 0;
+    if (!command) {
+        chatCooldownUntil = CHAT_COOLDOWN_ENABLED && !playerChatCooldownDisabled
+            ? Date.now() + CHAT_COOLDOWN_MS
+            : 0;
+    }
     updateChatMuteUI();
-    io.send("6", message.slice(0, 30));
+    io.send("6", message.slice(0, command ? 300 : 30));
 }
+
+window.addEventListener("wheel", function (event) {
+    if (!player || !inGame || event.deltaY === 0) return;
+    if (builderMode) {
+        if (isStoreMenuOpen()) return;
+        event.preventDefault();
+        cameraZoom = Math.max(MIN_CAMERA_ZOOM, Math.min(MAX_CAMERA_ZOOM,
+            cameraZoom + (event.deltaY < 0 ? 0.1 : -0.1)));
+        return;
+    }
+    if (!player.sleighMode) return;
+    event.preventDefault();
+    io.send("sw", event.deltaY < 0 ? 1 : -1);
+}, { passive: false });
+
+chatBox.addEventListener("input", function () {
+    chatBox.maxLength = chatBox.value.startsWith("/") ? 300 : 30;
+});
 
 function closeChat() {
     chatBox.value = "";
+    chatBox.maxLength = 30;
     chatHolder.style.display = "none";
     chatRoster.style.display = "none";
     chatHolder.classList.remove("rosterOpen");
@@ -2196,7 +2554,7 @@ function checkProfanityString(text) {
         }
         var mask = buildProfanityMask(term.length);
         var escapedTerm = escapeRegExp(term);
-        var re = new RegExp(escapedTerm, "gi");
+        var re = new RegExp("\\b" + escapedTerm + "\\b", "gi");
         result = result.replace(re, mask);
     }
     return result;
@@ -2272,6 +2630,13 @@ function touchMove(ev) {
             attackingTouch.currentX = t.pageX;
             attackingTouch.currentY = t.pageY;
             attackState = 1;
+            if (builderMode) {
+                mouseX = t.pageX;
+                mouseY = t.pageY;
+                if (selectedBuilderMob === null) {
+                    sendBuilderPlacement(mouseX, mouseY);
+                }
+            }
         }
     }
 }
@@ -2293,7 +2658,12 @@ function touchStart(ev) {
             attackingTouch.id = t.identifier;
             attackingTouch.startX = attackingTouch.currentX = t.pageX;
             attackingTouch.startY = attackingTouch.currentY = t.pageY;
-            if (player.buildIndex < 0) {
+            mouseX = t.pageX;
+            mouseY = t.pageY;
+            if (builderMode && selectedBuilderMob !== null) {
+                attackState = 1;
+                sendBuilderMobSpawn(mouseX, mouseY);
+            } else if (player.buildIndex < 0) {
                 attackState = 1;
                 sendAtckState();
             }
@@ -2316,6 +2686,8 @@ function touchEnd(ev) {
             sendMoveDir();
         } else if (t.identifier == attackingTouch.id) {
             attackingTouch.id = -1;
+            mouseX = t.pageX;
+            mouseY = t.pageY;
             if (player.buildIndex >= 0) {
                 attackState = 1;
                 sendAtckState();
@@ -2334,21 +2706,35 @@ function gameInput(e) {
     setUsingTouch(false);
     mouseX = e.clientX;
     mouseY = e.clientY;
+    if (builderMode && attackState === 1) {
+        sendBuilderPlacement(mouseX, mouseY);
+    }
 }
 
 gameCanvas.addEventListener('mousedown', mouseDown, false);
 function mouseDown(e) {
     setUsingTouch(false);
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+    if (builderMode && selectedBuilderMob !== null) {
+        attackState = 1;
+        sendBuilderMobSpawn(mouseX, mouseY);
+        return;
+    }
     attackState = 1;
     sendAtckState();
 }
 
-gameCanvas.addEventListener('mouseup', mouseUp, false);
+window.addEventListener('mouseup', mouseUp, false);
+window.addEventListener('pointerup', mouseUp, false);
 function mouseUp(e) {
     setUsingTouch(false);
     attackState = 0;
     sendAtckState();
 }
+
+window.addEventListener('blur', mouseUp, false);
+window.addEventListener('pointercancel', mouseUp, false);
 
 function getMoveDir() {
     var dx = 0;
@@ -2403,21 +2789,62 @@ function keysActive() {
 
 function keyDown(event) {
     var keyNum = event.which || event.keyCode || 0;
+    if (keyNum === 9 && hasOwnerTools && player && inGame &&
+        (chatHolder.style.display !== "block" || chatRoster.style.display === "grid")) {
+        event.preventDefault();
+        if (event.repeat) return;
+        if (chatRoster.style.display === "grid") {
+            closeChat();
+        } else {
+            if (isStoreMenuOpen()) {
+                storeMenu.style.display = "none";
+            }
+            io.send("0", "roster");
+        }
+        return;
+    }
+    if (player && player.alive && player.sleighMode && inGame &&
+        chatHolder.style.display != "block" && (keyNum === 73 || keyNum === 79)) {
+        event.preventDefault();
+        if (!event.repeat) {
+            cameraZoom = Math.max(MIN_CAMERA_ZOOM, Math.min(MAX_CAMERA_ZOOM,
+                cameraZoom + (keyNum === 73 ? 0.1 : -0.1)));
+        }
+        return;
+    }
+    if (keyNum === 9 && builderMode && player && player.alive &&
+        (!hasOwnerTools || event.shiftKey)) {
+        event.preventDefault();
+        if (isStoreMenuOpen()) {
+            storeMenu.style.display = "none";
+        } else {
+            toggleStoreMenu();
+        }
+        return;
+    }
     if (hasOwnerTools && event.key === "/" && chatHolder.style.display != "block" && player && player.alive) {
         event.preventDefault();
         toggleChat();
         if (chatHolder.style.display == "block" && !chatBox.disabled) {
             chatBox.value = "/";
+            chatBox.maxLength = 300;
             chatBox.focus();
         }
         return;
     }
-    if (keyNum == 32 && (storeMenu.style.display == "block" || allianceMenu.style.display == "block")) {
+    if (keyNum == 32 && (isStoreMenuOpen() || allianceMenu.style.display == "block")) {
         event.preventDefault();
     }
     if (keyNum == 27) {
         hideAllWindows();
     } else if (player && player.alive && keysActive()) {
+        if (keyNum === 69) {
+            if (!keys[keyNum]) {
+                keys[keyNum] = 1;
+                sendAutoGather();
+            }
+            return;
+        }
         if (!keys[keyNum]) {
             keys[keyNum] = 1;
             var customAction = getCustomKeyAction(keyNum);
@@ -2561,12 +2988,58 @@ window.addEventListener('keyup', UTILS.checkTrusted(keyUp));
 
 function sendAtckState() {
     if (player && player.alive) {
+        if (builderMode) {
+            if (attackState === 1 && selectedBuilderMob === null) {
+                recordClickEvent();
+                sendBuilderPlacement(mouseX, mouseY);
+            }
+            return;
+        }
         if (attackState === 1) {
             recordClickEvent();
         }
         io.send("F", attackState, getAttackDir());
     }
 }
+
+function sendBuilderPlacement(x, y) {
+    if (!builderMode || selectedBuilderMob !== null || !player ||
+        !Number.isFinite(camX) || !Number.isFinite(camY)) return;
+    var now = Date.now();
+    if (now - lastBuilderPlacementTime < 100) return;
+    lastBuilderPlacementTime = now;
+    var worldPosition = getBuilderWorldPosition(x, y);
+    io.send("bp", worldPosition.x, worldPosition.y);
+    io.send("F", 1, getAttackDir());
+}
+
+function getBuilderWorldPosition(x, y) {
+    var width = screenWidth || maxScreenWidth;
+    var height = screenHeight || maxScreenHeight;
+    var renderScale = Math.max(width / maxScreenWidth, height / maxScreenHeight);
+    return {
+        x: camX + (x - width / 2) / (renderScale * cameraZoom),
+        y: camY + (y - height / 2) / (renderScale * cameraZoom)
+    };
+}
+
+function sendBuilderMobSpawn(x, y) {
+    if (!builderMode || selectedBuilderMob === null || !player ||
+        !Number.isFinite(camX) || !Number.isFinite(camY)) return;
+    var now = Date.now();
+    if (now - lastBuilderMobSpawnTime < 500) return;
+    lastBuilderMobSpawnTime = now;
+    var worldPosition = getBuilderWorldPosition(x, y);
+    io.send("bs", selectedBuilderMob, worldPosition.x, worldPosition.y);
+}
+
+window.setInterval(function () {
+    if (builderMode && selectedBuilderMob === null && attackState === 1) {
+        sendBuilderPlacement(mouseX, mouseY);
+    } else if (builderMode && selectedBuilderMob !== null && attackState === 1) {
+        sendBuilderMobSpawn(mouseX, mouseY);
+    }
+}, 50);
 
 var lastMoveDir = undefined;
 
@@ -2588,10 +3061,17 @@ function sendMapPing() {
 }
 
 function sendAutoGather() {
-    io.send("K", 1);
+    autoGatherEnabled = !autoGatherEnabled;
+    io.send("K", 1, autoGatherEnabled);
 }
 
 function selectToBuild(index, wpn) {
+    if (builderMode) {
+        selectedBuilderMob = null;
+        if (isStoreMenuOpen() && currentBuilderTab === 1) {
+            generateStoreList();
+        }
+    }
     io.send("z", index, wpn);
 }
 
@@ -2847,6 +3327,7 @@ function setupGame(yourSID) {
     keys = {};
     playerSID = yourSID;
     attackState = 0;
+    autoGatherEnabled = false;
     inGame = true;
     if (firstSetup) {
         firstSetup = false;
@@ -2856,6 +3337,10 @@ function setupGame(yourSID) {
 
 function showText(x, y, value, type) {
     textManager.showText(x, y, 50, 0.18, 500, Math.abs(value), (value >= 0) ? "#fff" : "#8ecc51");
+}
+
+function showInvincibleText(x, y) {
+    textManager.showText(x, y, 50, 0.18, 700, "invincible!", "#fff");
 }
 
 var globalAnnouncementTimer;
@@ -2948,7 +3433,7 @@ function updateStatusDisplay() {
 }
 
 var iconSprites = {};
-var icons = ["crown", "skull"];
+var icons = ["crown", "skull", "shield"];
 
 function loadIcons() {
     for (var i = 0; i < icons.length; ++i) {
@@ -3141,30 +3626,37 @@ function updateGame() {
             }
         }
 
-        var xOffset = camX - (maxScreenWidth / 2);
-        var yOffset = camY - (maxScreenHeight / 2);
+        worldViewWidth = maxScreenWidth / cameraZoom;
+        worldViewHeight = maxScreenHeight / cameraZoom;
+        var xOffset = camX - (worldViewWidth / 2);
+        var yOffset = camY - (worldViewHeight / 2);
 
         prepareObjectRenderLists(xOffset, yOffset, delta);
 
-        if (config.snowBiomeTop - yOffset <= 0 && config.mapScale - config.snowBiomeTop - yOffset >= maxScreenHeight) {
+        mainContext.save();
+        if (cameraZoom !== 1) {
+            mainContext.scale(cameraZoom, cameraZoom);
+        }
+
+        if (config.snowBiomeTop - yOffset <= 0 && config.mapScale - config.snowBiomeTop - yOffset >= worldViewHeight) {
             mainContext.fillStyle = "#b6db66";
-            mainContext.fillRect(0, 0, maxScreenWidth, maxScreenHeight);
+            mainContext.fillRect(0, 0, worldViewWidth, worldViewHeight);
         } else if (config.mapScale - config.snowBiomeTop - yOffset <= 0) {
             mainContext.fillStyle = "#dbc666";
-            mainContext.fillRect(0, 0, maxScreenWidth, maxScreenHeight);
-        } else if (config.snowBiomeTop - yOffset >= maxScreenHeight) {
+            mainContext.fillRect(0, 0, worldViewWidth, worldViewHeight);
+        } else if (config.snowBiomeTop - yOffset >= worldViewHeight) {
             mainContext.fillStyle = "#fff";
-            mainContext.fillRect(0, 0, maxScreenWidth, maxScreenHeight);
+            mainContext.fillRect(0, 0, worldViewWidth, worldViewHeight);
         } else if (config.snowBiomeTop - yOffset >= 0) {
             mainContext.fillStyle = "#fff";
-            mainContext.fillRect(0, 0, maxScreenWidth, config.snowBiomeTop - yOffset);
+            mainContext.fillRect(0, 0, worldViewWidth, config.snowBiomeTop - yOffset);
             mainContext.fillStyle = "#b6db66";
-            mainContext.fillRect(0, config.snowBiomeTop - yOffset, maxScreenWidth, maxScreenHeight - (config.snowBiomeTop - yOffset));
+            mainContext.fillRect(0, config.snowBiomeTop - yOffset, worldViewWidth, worldViewHeight - (config.snowBiomeTop - yOffset));
         } else {
             mainContext.fillStyle = "#b6db66";
-            mainContext.fillRect(0, 0, maxScreenWidth, (config.mapScale - config.snowBiomeTop - yOffset));
+            mainContext.fillRect(0, 0, worldViewWidth, (config.mapScale - config.snowBiomeTop - yOffset));
             mainContext.fillStyle = "#dbc666";
-            mainContext.fillRect(0, (config.mapScale - config.snowBiomeTop - yOffset), maxScreenWidth, maxScreenHeight - (config.mapScale - config.snowBiomeTop - yOffset));
+            mainContext.fillRect(0, (config.mapScale - config.snowBiomeTop - yOffset), worldViewWidth, worldViewHeight - (config.mapScale - config.snowBiomeTop - yOffset));
         }
 
         if (!firstSetup) {
@@ -3188,17 +3680,17 @@ function updateGame() {
         mainContext.beginPath();
 
         // Add grind checkbox in main menu
-        for (var x = -camX; x < maxScreenWidth; x += maxScreenHeight / 18) {
+        for (var x = -xOffset; x < worldViewWidth; x += maxScreenHeight / 18) {
             if (x > 0) {
                 mainContext.moveTo(x, 0);
-                mainContext.lineTo(x, maxScreenHeight);
+                mainContext.lineTo(x, worldViewHeight);
             }
         }
 
-        for (var y = -camY; y < maxScreenHeight; y += maxScreenHeight / 18) {
-            if (x > 0) {
+        for (var y = -yOffset; y < worldViewHeight; y += maxScreenHeight / 18) {
+            if (y > 0) {
                 mainContext.moveTo(0, y);
-                mainContext.lineTo(maxScreenWidth, y);
+                mainContext.lineTo(worldViewWidth, y);
             }
         }
 
@@ -3233,31 +3725,34 @@ function updateGame() {
         renderPlayers(xOffset, yOffset, 1);
         renderGameObjects(2, xOffset, yOffset);
         renderGameObjects(3, xOffset, yOffset);
+        renderSleighShadows(xOffset, yOffset);
+        renderSleighs(xOffset, yOffset);
 
         mainContext.fillStyle = "#000";
         mainContext.globalAlpha = 0.09;
         if (xOffset <= 0) {
-            mainContext.fillRect(0, 0, -xOffset, maxScreenHeight);
+            mainContext.fillRect(0, 0, -xOffset, worldViewHeight);
         }
-        if (config.mapScale - xOffset <= maxScreenWidth) {
+        if (config.mapScale - xOffset <= worldViewWidth) {
             var tmpY = Math.max(0, -yOffset);
-            mainContext.fillRect(config.mapScale - xOffset, tmpY, maxScreenWidth - (config.mapScale - xOffset), maxScreenHeight - tmpY);
+            mainContext.fillRect(config.mapScale - xOffset, tmpY, worldViewWidth - (config.mapScale - xOffset), worldViewHeight - tmpY);
         }
         if (yOffset <= 0) {
-            mainContext.fillRect(-xOffset, 0, maxScreenWidth + xOffset, -yOffset);
+            mainContext.fillRect(-xOffset, 0, worldViewWidth + xOffset, -yOffset);
         }
-        if (config.mapScale - yOffset <= maxScreenHeight) {
+        if (config.mapScale - yOffset <= worldViewHeight) {
             var tmpX = Math.max(0, -xOffset);
             var tmpMin = 0;
-            if (config.mapScale - xOffset <= maxScreenWidth) {
-                tmpMin = maxScreenWidth - (config.mapScale - xOffset);
+            if (config.mapScale - xOffset <= worldViewWidth) {
+                tmpMin = worldViewWidth - (config.mapScale - xOffset);
             }
-            mainContext.fillRect(tmpX, config.mapScale - yOffset, (maxScreenWidth - tmpX) - tmpMin, maxScreenHeight - (config.mapScale - yOffset));
+            mainContext.fillRect(tmpX, config.mapScale - yOffset, (worldViewWidth - tmpX) - tmpMin, worldViewHeight - (config.mapScale - yOffset));
         }
 
         mainContext.globalAlpha = 1;
         mainContext.fillStyle = "rgba(0, 0, 70, 0.35)";
-        mainContext.fillRect(0, 0, maxScreenWidth, maxScreenHeight);
+        mainContext.fillRect(0, 0, worldViewWidth, worldViewHeight);
+        renderMapBorder(xOffset, yOffset);
 
         mainContext.strokeStyle = darkOutlineColor;
         for (var i = 0; i < players.length + ais.length; ++i) {
@@ -3265,7 +3760,9 @@ function updateGame() {
             if (tmpObj.visible) {
 
                 if (tmpObj.skinIndex != 10 || (tmpObj == player) || (tmpObj.team && tmpObj.team == player.team)) {
-                    var tmpText = (tmpObj.team ? "[" + tmpObj.team + "] " : "") + (tmpObj.name || "");
+                    var hideLocalName = tmpObj === player && builderMode && isStoreMenuOpen();
+                    var tmpText = hideLocalName ? "" :
+                        (tmpObj.team ? "[" + tmpObj.team + "] " : "") + (tmpObj.name || "");
                     var ownerInfo = tmpObj.isPlayer ? ownerAccountIds[tmpObj.sid] : null;
                     var isOwnerShown = tmpObj.isPlayer && shownOwnerIds[tmpObj.sid] === true;
                     var staffRole = ownerInfo && ownerInfo.role;
@@ -3312,6 +3809,25 @@ function updateGame() {
                             var tmpX = tmpObj.x - xOffset - (tmpS / 2) - (tmpTextWidth / 2) - config.crownPad;
                             mainContext.drawImage(iconSprites["crown"], tmpX, (tmpObj.y - yOffset - tmpObj.scale) -
                                 config.nameY - (tmpS / 2) - 5, tmpS, tmpS);
+                        }
+                        if (tmpObj.isPlayer && shieldedPlayerIds[tmpObj.sid] &&
+                            iconSprites["shield"].isLoaded) {
+                            var shieldHeight = config.crownIconScale * 0.62;
+                            var shieldWidth = shieldHeight *
+                                (iconSprites["shield"].naturalWidth / iconSprites["shield"].naturalHeight);
+                            var nameLeft = tmpObj.x - xOffset - (tmpTextWidth / 2);
+                            var shieldX = nameLeft - config.crownPad - shieldWidth;
+                            if (tmpObj.isLeader) {
+                                shieldX -= shieldWidth + 4;
+                            }
+                            mainContext.drawImage(
+                                iconSprites["shield"],
+                                shieldX,
+                                (tmpObj.y - yOffset - tmpObj.scale) - config.nameY -
+                                    (shieldHeight / 2) - 5,
+                                shieldWidth,
+                                shieldHeight
+                            );
                         }
                         if (tmpObj.iconIndex == 1 && iconSprites["skull"].isLoaded) {
                             var tmpS = config.crownIconScale;
@@ -3368,6 +3884,7 @@ function updateGame() {
         }
     }
 
+    mainContext.restore();
     renderMinimap(delta);
 
     if (controllingTouch.id !== -1) {
@@ -3445,9 +3962,65 @@ function renderProjectile(x, y, obj, ctxt, debug) {
 function renderWaterBodies(xOffset, yOffset, ctxt, padding) {
     var tmpW = config.riverWidth + padding;
     var tmpY = (config.mapScale / 2) - yOffset - (tmpW / 2);
-    if (tmpY < maxScreenHeight && tmpY + tmpW > 0) {
-        ctxt.fillRect(0, tmpY, maxScreenWidth, tmpW);
+    if (tmpY < worldViewHeight && tmpY + tmpW > 0) {
+        ctxt.fillRect(0, tmpY, worldViewWidth, tmpW);
     }
+}
+
+function renderMapBorder(xOffset, yOffset) {
+    var inset = outlineWidth * 1.8;
+    var left = -xOffset;
+    var top = -yOffset;
+    var right = config.mapScale - xOffset;
+    var bottom = config.mapScale - yOffset;
+    var viewRight = worldViewWidth;
+    var viewBottom = worldViewHeight;
+
+    mainContext.save();
+    mainContext.globalAlpha = 1;
+    mainContext.lineJoin = "miter";
+    mainContext.lineWidth = outlineWidth;
+    mainContext.strokeStyle = darkOutlineColor;
+    mainContext.beginPath();
+    if (left >= 0 && left <= viewRight) {
+        mainContext.moveTo(left, Math.max(0, top));
+        mainContext.lineTo(left, Math.min(viewBottom, bottom));
+    }
+    if (right >= 0 && right <= viewRight) {
+        mainContext.moveTo(right, Math.max(0, top));
+        mainContext.lineTo(right, Math.min(viewBottom, bottom));
+    }
+    if (top >= 0 && top <= viewBottom) {
+        mainContext.moveTo(Math.max(0, left), top);
+        mainContext.lineTo(Math.min(viewRight, right), top);
+    }
+    if (bottom >= 0 && bottom <= viewBottom) {
+        mainContext.moveTo(Math.max(0, left), bottom);
+        mainContext.lineTo(Math.min(viewRight, right), bottom);
+    }
+    mainContext.stroke();
+
+    mainContext.lineWidth = outlineWidth * 0.55;
+    mainContext.strokeStyle = outlineColor;
+    mainContext.beginPath();
+    if (left + inset >= 0 && left + inset <= viewRight) {
+        mainContext.moveTo(left + inset, Math.max(0, top + inset));
+        mainContext.lineTo(left + inset, Math.min(viewBottom, bottom - inset));
+    }
+    if (right - inset >= 0 && right - inset <= viewRight) {
+        mainContext.moveTo(right - inset, Math.max(0, top + inset));
+        mainContext.lineTo(right - inset, Math.min(viewBottom, bottom - inset));
+    }
+    if (top + inset >= 0 && top + inset <= viewBottom) {
+        mainContext.moveTo(Math.max(0, left + inset), top + inset);
+        mainContext.lineTo(Math.min(viewRight, right - inset), top + inset);
+    }
+    if (bottom - inset >= 0 && bottom - inset <= viewBottom) {
+        mainContext.moveTo(Math.max(0, left + inset), bottom - inset);
+        mainContext.lineTo(Math.min(viewRight, right - inset), bottom - inset);
+    }
+    mainContext.stroke();
+    mainContext.restore();
 }
 
 function renderGameObjects(layer, xOffset, yOffset) {
@@ -3495,7 +4068,7 @@ function renderPlayers(xOffset, yOffset, zIndex) {
         tmpObj = players[i];
         if (tmpObj.zIndex == zIndex) {
             tmpObj.animate(delta);
-            if (tmpObj.visible) {
+            if (tmpObj.visible && !tmpObj.sleighMode) {
                 tmpObj.skinRot += (0.002 * delta);
                 tmpDir = ((tmpObj == player) ? getAttackDir() : tmpObj.dir) + tmpObj.dirPlus;
                 mainContext.save();
@@ -3505,6 +4078,60 @@ function renderPlayers(xOffset, yOffset, zIndex) {
                 mainContext.restore();
             }
         }
+    }
+}
+
+var sleighSprite;
+
+function getSleighSprite() {
+    if (!sleighSprite) {
+        sleighSprite = new Image();
+        sleighSprite.src = ".././img/sleigh.png";
+    }
+    return sleighSprite;
+}
+
+function renderSleighShadows(xOffset, yOffset) {
+    var sprite = getSleighSprite();
+    if (!sprite.complete || !sprite.naturalWidth) return;
+    mainContext.save();
+    mainContext.globalAlpha = 0.28;
+    mainContext.filter = "brightness(0)";
+    for (var i = 0; i < players.length; i++) {
+        var tmpPlayer = players[i];
+        if (!tmpPlayer.sleighMode || !tmpPlayer.visible) continue;
+        var width = tmpPlayer.scale * 9.45;
+        var height = width * (sprite.naturalHeight / sprite.naturalWidth);
+        mainContext.save();
+        mainContext.translate(tmpPlayer.x - xOffset, tmpPlayer.y - yOffset + tmpPlayer.scale * 1.1);
+        var dir = ((tmpPlayer === player) ? getAttackDir() : tmpPlayer.dir) + tmpPlayer.dirPlus;
+        mainContext.rotate(dir - Math.PI / 2);
+        mainContext.drawImage(sprite, -width / 2, -height / 2 + height * 0.312, width, height);
+        mainContext.restore();
+    }
+    mainContext.restore();
+    mainContext.filter = "none";
+}
+
+function renderSleighs(xOffset, yOffset) {
+    var sprite = getSleighSprite();
+    if (!sprite.complete || !sprite.naturalWidth) return;
+    for (var i = 0; i < players.length; i++) {
+        var tmpPlayer = players[i];
+        if (!tmpPlayer.sleighMode || !tmpPlayer.visible) continue;
+        var width = tmpPlayer.scale * 9.45;
+        var height = width * (sprite.naturalHeight / sprite.naturalWidth);
+        var dir = ((tmpPlayer === player) ? getAttackDir() : tmpPlayer.dir) + tmpPlayer.dirPlus;
+        mainContext.save();
+        mainContext.translate(tmpPlayer.x - xOffset, tmpPlayer.y - yOffset);
+        mainContext.save();
+        mainContext.rotate(dir - Math.PI / 2);
+        mainContext.drawImage(sprite, -width / 2, -height / 2 + height * 0.312, width, height);
+        mainContext.restore();
+        tmpPlayer.skinRot += (0.002 * delta);
+        mainContext.rotate(dir);
+        renderPlayer(tmpPlayer, mainContext);
+        mainContext.restore();
     }
 }
 
@@ -4046,6 +4673,16 @@ function loadAI(data) {
         for (var i = 0; i < data.length;) {
             tmpObj = findAIBySID(data[i]);
             if (tmpObj) {
+                if (tmpObj.index !== data[i + 1]) {
+                    tmpObj.init(data[i + 2], data[i + 3], data[i + 4],
+                        data[i + 1], aiManager.aiTypes[data[i + 1]]);
+                    tmpObj.sid = data[i];
+                    tmpObj.nameIndex = data[i + 6];
+                    if (!aiManager.aiTypes[data[i + 1]].name) {
+                        tmpObj.name = config.cowNames[data[i + 6]];
+                    }
+                    tmpObj.forcePos = true;
+                }
                 tmpObj.index = data[i + 1];
                 tmpObj.t1 = (tmpObj.t2 === undefined) ? tmpTime : tmpObj.t2;
                 tmpObj.t2 = tmpTime;
@@ -4093,12 +4730,22 @@ function renderAI(obj, ctxt) {
     }
     if (tmpSprite.isLoaded) {
         var tmpScale = obj.scale * 1.2 * (obj.spriteMlt || 1);
-        ctxt.drawImage(tmpSprite, -tmpScale, -tmpScale, tmpScale * 2, tmpScale * 2);
+        var drawWidth = tmpScale * 2;
+        var drawHeight = tmpScale * 2;
+        if (obj.preserveAspectRatio && tmpSprite.width && tmpSprite.height) {
+            if (tmpSprite.width > tmpSprite.height) {
+                drawHeight *= tmpSprite.height / tmpSprite.width;
+            } else {
+                drawWidth *= tmpSprite.width / tmpSprite.height;
+            }
+        }
+        ctxt.drawImage(tmpSprite, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
     }
 }
 
 function isOnScreen(x, y, s) {
-    return (x + s >= 0 && x - s <= maxScreenWidth && y + s >= 0 && y - s <= maxScreenHeight)
+    return (x + s >= 0 && x - s <= worldViewWidth &&
+        y + s >= 0 && y - s <= worldViewHeight);
 }
 
 function addPlayer(data, isYou) {
@@ -4131,6 +4778,8 @@ function addPlayer(data, isYou) {
 function removePlayer(id) {
     for (var i = 0; i < players.length; i++) {
         if (players[i].id == id) {
+            delete shieldedPlayerIds[players[i].sid];
+            delete sleighPlayerIds[players[i].sid];
             players.splice(i, 1);
             break;
         }
@@ -4188,9 +4837,10 @@ function updatePlayers(data) {
             tmpObj.zIndex = data[i + 12];
             tmpObj.cps = typeof data[i + 13] === "number" ? Math.max(0, Math.round(data[i + 13])) : 0;
             tmpObj.ping = typeof data[i + 14] === "number" ? Math.max(-1, Math.round(data[i + 14])) : -1;
+            tmpObj.sleighMode = data[i + 15] === true || Boolean(sleighPlayerIds[tmpObj.sid]);
             tmpObj.visible = true;
         }
-        i += 15;
+        i += 16;
     }
 }
 
@@ -4388,6 +5038,7 @@ window.kickFromClan = kickFromClan;
 window.sendJoin = sendJoin;
 window.leaveAlliance = leaveAlliance;
 window.createAlliance = createAlliance;
+window.changeBuilderTab = changeBuilderTab;
 window.storeBuy = storeBuy;
 window.storeEquip = storeEquip;
 window.showItemInfo = showItemInfo;

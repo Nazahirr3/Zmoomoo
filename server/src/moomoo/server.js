@@ -14,6 +14,32 @@ import { ClanManager } from "./modules/clanManager.js";
 import NanoTimer from "nanotimer";
 import { encode } from "msgpack-lite";
 
+export function isAnimalSpawnBiomeValid(type, y, config) {
+    const allowedBiomes = type.spawnBiomes || (type.snowOnly ? ["snow"] : null);
+    if (!allowedBiomes) return true;
+
+    const scale = type.scale;
+    const snowEnd = config.snowBiomeTop;
+    const desertStart = config.mapScale - config.snowBiomeTop;
+    return allowedBiomes.some(biome => {
+        if (biome === "desert") return y - scale >= desertStart;
+        if (biome === "normal") {
+            const inNormalBand = y - scale > snowEnd && y + scale < desertStart;
+            const waterTop = config.mapScale / 2 - config.riverWidth / 2;
+            const waterBottom = config.mapScale / 2 + config.riverWidth / 2;
+            const onGrass = y + scale < waterTop || y - scale > waterBottom;
+            return inNormalBand && (type.aquatic || onGrass);
+        }
+        if (biome === "snow") return y + scale <= snowEnd;
+        if (biome === "water") {
+            const waterTop = config.mapScale / 2 - config.riverWidth / 2;
+            const waterBottom = config.mapScale / 2 + config.riverWidth / 2;
+            return y - scale >= waterTop && y + scale <= waterBottom;
+        }
+        return false;
+    });
+}
+
 export class Game {
 
     // var
@@ -369,6 +395,21 @@ export class Game {
                 xRatio: 0.78,
                 yRatio: 0.64
             }]
+        }, {
+            index: 14,
+            desired: 2
+        }, {
+            index: 15,
+            desired: 3
+        }, {
+            index: 16,
+            desired: 2
+        }, {
+            index: 17,
+            desired: 4
+        }, {
+            index: 18,
+            desired: 3
         }];
 
         const planSource = Array.isArray(config.animalSpawnPlan) && config.animalSpawnPlan.length ? config.animalSpawnPlan : fallbackPlan;
@@ -413,7 +454,7 @@ export class Game {
         for (const plan of this.aiSpawnPlan) {
             let activeOfType = 0;
             for (const ai of this.ais) {
-                if (ai.active && ai.index === plan.index) {
+                if (ai.active && !ai.builderSpawned && ai.index === plan.index) {
                     activeOfType++;
                 }
             }
@@ -454,7 +495,10 @@ export class Game {
         if (x < scale || y < scale || x > config.mapScale - scale || y > config.mapScale - scale) {
             return false;
         }
-        if (!this.object_manager.checkItemLocation(x, y, scale, 0.6, null, false, null)) {
+        if (!isAnimalSpawnBiomeValid(type, y, config)) {
+            return false;
+        }
+        if (!this.object_manager.checkItemLocation(x, y, scale, 1, null, false, null)) {
             return false;
         }
         for (const ai of this.ais) {
@@ -469,9 +513,44 @@ export class Game {
     randomAnimalPosition(index) {
         const type = this.ai_manager.aiTypes[index];
         if (!type) return null;
+        if (!type.spawnBiomes && !type.snowOnly) {
+            for (let attempt = 0; attempt < 40; attempt++) {
+                const x = UTILS.randInt(type.scale, config.mapScale - type.scale);
+                const y = UTILS.randInt(type.scale, config.mapScale - type.scale);
+                if (this.validateAnimalSpawn(index, x, y)) return { x, y };
+            }
+            return null;
+        }
+        const biomes = type.spawnBiomes || (type.snowOnly ? ["snow"] : ["desert", "normal", "snow"]);
         for (let attempt = 0; attempt < 40; attempt++) {
+            const biome = biomes[UTILS.randInt(0, biomes.length - 1)];
+            let minY = type.scale;
+            let maxY = config.mapScale - type.scale;
+            if (biome === "desert") {
+                minY = config.mapScale - config.snowBiomeTop + type.scale;
+            } else if (biome === "normal") {
+                minY = config.snowBiomeTop + type.scale + 1;
+                maxY = config.mapScale - config.snowBiomeTop - type.scale - 1;
+                if (!type.aquatic) {
+                    const waterTop = config.mapScale / 2 - config.riverWidth / 2;
+                    const waterBottom = config.mapScale / 2 + config.riverWidth / 2;
+                    if (UTILS.randInt(0, 1)) {
+                        minY = Math.max(minY, waterBottom + type.scale + 1);
+                    } else {
+                        maxY = Math.min(maxY, waterTop - type.scale - 1);
+                    }
+                }
+            } else if (biome === "snow") {
+                maxY = config.snowBiomeTop - type.scale;
+            } else if (biome === "water") {
+                minY = config.mapScale / 2 - config.riverWidth / 2 + type.scale;
+                maxY = config.mapScale / 2 + config.riverWidth / 2 - type.scale;
+            } else {
+                continue;
+            }
+            if (minY > maxY) continue;
             const x = UTILS.randInt(type.scale, config.mapScale - type.scale);
-            const y = UTILS.randInt(type.scale, config.mapScale - type.scale);
+            const y = UTILS.randInt(minY, maxY);
             if (this.validateAnimalSpawn(index, x, y)) {
                 return {
                     x,
@@ -479,10 +558,7 @@ export class Game {
                 };
             }
         }
-        return {
-            x: UTILS.randInt(type.scale, config.mapScale - type.scale),
-            y: UTILS.randInt(type.scale, config.mapScale - type.scale)
-        };
+        return null;
     }
 
     updateAnimals(delta) {

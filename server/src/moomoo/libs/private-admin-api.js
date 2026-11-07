@@ -20,6 +20,16 @@ function validDiscordId(value) {
     return typeof value === "string" && /^\d{15,22}$/.test(value);
 }
 
+function logAction(options, event) {
+    if (typeof options.logAction !== "function") return;
+    try {
+        Promise.resolve(options.logAction(event))
+            .catch(error => console.error("[moderation] Could not queue action log:", error.message));
+    } catch (error) {
+        console.error("[moderation] Could not queue action log:", error.message);
+    }
+}
+
 function authenticateRequest(request, response, next) {
     const key = process.env.ADMIN_API_KEY;
     const providedKey = request.get("zmoomoo-api-key") || "";
@@ -72,6 +82,12 @@ export function registerPrivateAdminApi(app, options = {}) {
         store.writeModerationAudit(request.adminExecutorId, "ban", discordId, {
             bannedUntil, reason: String(reason || "").slice(0, 500), accountId: user?.id || null
         });
+        logAction(options, {
+            action: "account_ban",
+            actor: request.adminExecutorId,
+            target: discordId,
+            details: `Until ${new Date(bannedUntil).toISOString()}. ${String(reason || "").slice(0, 300)}`
+        });
         return response.json({ user, banned: true });
     });
 
@@ -80,6 +96,7 @@ export function registerPrivateAdminApi(app, options = {}) {
         if (!validDiscordId(discordId)) return response.status(400).json({ error: "invalid_parameters" });
         const user = store.unbanUser(discordId);
         store.writeModerationAudit(request.adminExecutorId, "unban", discordId, { accountId: user?.id || null });
+        logAction(options, { action: "account_unban", actor: request.adminExecutorId, target: discordId });
         return response.json({ user, banned: false });
     });
 
@@ -96,6 +113,12 @@ export function registerPrivateAdminApi(app, options = {}) {
         if (!user) return response.status(404).json({ error: "not_found" });
         store.deleteUser(userId);
         store.writeModerationAudit(request.adminExecutorId, "delete_account", user.discord_id, { accountId: userId });
+        logAction(options, {
+            action: "account_delete",
+            actor: request.adminExecutorId,
+            target: user.discord_id,
+            details: `Account ID ${userId}.`
+        });
         return response.json({ deleted: true });
     });
 
@@ -109,6 +132,12 @@ export function registerPrivateAdminApi(app, options = {}) {
         store.writeModerationAudit(request.adminExecutorId, "ban_ip", request.adminExecutorId, {
             bannedUntil, reason: String(reason || "").slice(0, 500)
         }, "ip", store.hashIpForAudit(address));
+        logAction(options, {
+            action: "ip_ban",
+            actor: request.adminExecutorId,
+            target: store.hashIpForAudit(address),
+            details: `Until ${new Date(bannedUntil).toISOString()}. ${String(reason || "").slice(0, 300)}`
+        });
         return response.json({ banned: true });
     });
 
@@ -118,7 +147,9 @@ export function registerPrivateAdminApi(app, options = {}) {
             return response.status(400).json({ error: "invalid_parameters" });
         }
         store.unbanIp(address);
-        store.writeModerationAudit(request.adminExecutorId, "unban_ip", request.adminExecutorId, {}, "ip", store.hashIpForAudit(address));
+        const addressHash = store.hashIpForAudit(address);
+        store.writeModerationAudit(request.adminExecutorId, "unban_ip", request.adminExecutorId, {}, "ip", addressHash);
+        logAction(options, { action: "ip_unban", actor: request.adminExecutorId, target: addressHash });
         return response.json({ banned: false });
     });
 }

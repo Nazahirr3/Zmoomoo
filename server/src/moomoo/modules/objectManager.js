@@ -214,6 +214,25 @@ export class ObjectManager {
             }
         };
 
+        this.removePlayerBuildings = function(player, server) {
+            var removed = 0;
+            var removedByGroup = new Map();
+            for (var i = 0; i < gameObjects.length; ++i) {
+                var obj = gameObjects[i];
+                if (!obj.active || obj.owner !== player || !obj.group || !obj.group.place) continue;
+                this.disableObj(obj);
+                removed++;
+                removedByGroup.set(obj.group.id, (removedByGroup.get(obj.group.id) || 0) + 1);
+                if (server) server.broadcast("Q", obj.sid);
+            }
+            if (typeof player.changeItemCount === "function") {
+                for (var [groupId, count] of removedByGroup) {
+                    player.changeItemCount(groupId, -count);
+                }
+            }
+            return removed;
+        };
+
         // FETCH SPAWN OBJECT:
         this.fetchSpawnObj = function(sid) {
             var tmpLoc = null;
@@ -265,6 +284,7 @@ export class ObjectManager {
 
         // CHECK PLAYER COLLISION:
         this.checkCollision = function(player, other, delta) {
+            if (player.builderMode || other.builderMode || player.sleighMode || other.sleighMode) return false;
             delta = delta || 1;
             var dx = player.x - other.x;
             var dy = player.y - other.y;

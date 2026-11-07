@@ -1,4 +1,23 @@
 var PI2 = Math.PI * 2;
+
+export function isWithinAIContactShape(ai, player) {
+    if (!ai.contactShape) {
+        return Math.hypot(player.x - ai.x, player.y - ai.y) <=
+            (ai.scale + player.scale) * ai.contactRangeMultiplier;
+    }
+
+    var dx = player.x - ai.x;
+    var dy = player.y - ai.y;
+    var cos = Math.cos(ai.dir);
+    var sin = Math.sin(ai.dir);
+    var localX = dx * cos + dy * sin;
+    var localY = -dx * sin + dy * cos;
+    var reachX = ai.scale * ai.contactShape.length + player.scale;
+    var reachY = ai.scale * ai.contactShape.width + player.scale;
+    return (localX * localX) / (reachX * reachX) +
+        (localY * localY) / (reachY * reachY) <= 1;
+}
+
 export class AI {
     constructor(sid, objectManager, players, items, UTILS, config, scoreCallback, server) {
         this.sid = sid;
@@ -18,12 +37,29 @@ export class AI {
             this.dirPlus = 0;
             this.index = index;
             this.src = data.src;
-            if (data.name) {
-                this.name = data.name;
-            }
+            this.name = data.name || null;
+            this.boss = data.boss === true;
+            this.aquatic = data.aquatic === true;
+            this.bullRepel = data.bullRepel === true;
+            this.waterSpeedMultiplier = data.waterSpeedMultiplier;
+            this.fleeOnlyFromNonPlayers = data.fleeOnlyFromNonPlayers === true;
+            this.fleeOnDamage = data.fleeOnDamage === true;
+            this.fleeFromSpikes = data.fleeFromSpikes === true;
+            this.snowOnly = data.snowOnly === true;
+            this.desertOnly = data.desertOnly === true;
+            this.retaliatesOnlyWhenAttacked = data.retaliatesOnlyWhenAttacked === true;
+            this.preserveAspectRatio = data.preserveAspectRatio === true;
+            this.waterLocked = this.aquatic &&
+                y >= config.mapScale / 2 - config.riverWidth / 2 &&
+                y <= config.mapScale / 2 + config.riverWidth / 2;
+            this.landDamageTimer = 0;
             this.weightM = data.weightM;
             this.speed = data.speed;
+            this.fleeSpeed = data.fleeSpeed;
+            this.chargeSpeed = data.chargeSpeed;
             this.killScore = data.killScore;
+            this.xpReward = data.xpReward;
+            this.goldReward = data.goldReward;
             this.turnSpeed = data.turnSpeed;
             this.scale = data.scale;
             this.maxHealth = data.health;
@@ -33,6 +69,11 @@ export class AI {
             this.viewRange = data.viewRange;
             this.drop = data.drop;
             this.dmg = data.dmg;
+            this.contactDamage = data.contactDamage;
+            this.contactDamageInterval = data.contactDamageInterval;
+            this.contactRangeMultiplier = data.contactRangeMultiplier || 1;
+            this.contactShape = data.contactShape || null;
+            this.contactDamageTimers = Object.create(null);
             this.hostile = data.hostile;
             this.dontRun = data.dontRun;
             this.hitRange = data.hitRange;
@@ -51,6 +92,7 @@ export class AI {
             this.alive = true;
             this.runFrom = null;
             this.chargeTarget = null;
+            this.provokedPlayer = null;
             this.dmgOverTime = {};
         };
 
@@ -58,6 +100,47 @@ export class AI {
         var timerCount = 0;
         this.update = function(delta) {
             if (this.active) {
+                if (this.retaliatesOnlyWhenAttacked && this.provokedPlayer &&
+                    (!this.provokedPlayer.alive || this.provokedPlayer.builderMode || this.provokedPlayer.sleighMode ||
+                        UTILS.getDistance(this.x, this.y, this.provokedPlayer.x, this.provokedPlayer.y) > this.viewRange)) {
+                    this.provokedPlayer = null;
+                    this.chargeTarget = null;
+                    this.runFrom = null;
+                    this.moveCount = 0;
+                    this.waitCount = 1000;
+                }
+                if (this.chargeTarget && this.chargeTarget.sleighMode) {
+                    if (this.provokedPlayer === this.chargeTarget) this.provokedPlayer = null;
+                    this.chargeTarget = null;
+                    this.runFrom = null;
+                    this.moveCount = 0;
+                    this.waitCount = 1;
+                }
+                if (this.aquatic) {
+                    var riverTop = config.mapScale / 2 - config.riverWidth / 2;
+                    var riverBottom = config.mapScale / 2 + config.riverWidth / 2;
+                    if (this.y >= riverTop && this.y <= riverBottom) {
+                        this.waterLocked = true;
+                    }
+                    if (this.waterLocked) {
+                        var waterMinY = riverTop + this.scale;
+                        var waterMaxY = riverBottom - this.scale;
+                        if (this.y < waterMinY) {
+                            this.y = waterMinY;
+                            this.yVel = Math.max(0, this.yVel);
+                        } else if (this.y > waterMaxY) {
+                            this.y = waterMaxY;
+                            this.yVel = Math.min(0, this.yVel);
+                        }
+                    } else {
+                        this.landDamageTimer += delta;
+                        if (this.landDamageTimer >= 1000) {
+                            this.landDamageTimer %= 1000;
+                            this.changeHealth(-Math.max(1, this.maxHealth * 0.05), null, null, true);
+                            if (!this.active) return;
+                        }
+                    }
+                }
                 // SPAWN DELAY:
                 if (this.spawnCounter) {
                     this.spawnCounter -= delta;
@@ -86,7 +169,7 @@ export class AI {
                 var charging = false;
                 var slowMlt = 1;
                 if (!this.zIndex && !this.lockMove && this.y >= config.mapScale / 2 - config.riverWidth / 2 && this.y <= config.mapScale / 2 + config.riverWidth / 2) {
-                    slowMlt = 0.33;
+                    slowMlt = this.waterSpeedMultiplier || 0.33;
                     this.xVel += config.waterCurrent * delta;
                 }
                 if (this.lockMove) {
@@ -101,7 +184,10 @@ export class AI {
                                 var bestDst;
                                 var tmpDist;
                                 for (var i = 0; i < players.length; ++i) {
-                                    if (players[i].alive && !(players[i].skin && players[i].skin.bullRepel)) {
+                                    if (players[i].alive && !players[i].builderMode && !players[i].sleighMode &&
+                                        (!this.retaliatesOnlyWhenAttacked || players[i] === this.provokedPlayer) &&
+                                        !(players[i].skin && players[i].skin.bullRepel &&
+                                            (!this.bullRepel || players[i] !== this.provokedPlayer))) {
                                         tmpDist = UTILS.getDistance(this.x, this.y, players[i].x, players[i].y);
                                         if (tmpDist <= this.viewRange && (!tmpPlayer || tmpDist < bestDst)) {
                                             bestDst = tmpDist;
@@ -126,11 +212,11 @@ export class AI {
                             var tmpSpd = this.speed * slowMlt;
                             if (this.runFrom && this.runFrom.active && !(this.runFrom.isPlayer && !this.runFrom.alive)) {
                                 this.targetDir = UTILS.getDirection(this.x, this.y, this.runFrom.x, this.runFrom.y);
-                                tmpSpd *= 1.42;
+                                tmpSpd = (this.fleeSpeed || this.speed * 1.42) * slowMlt;
                             } else {
-                                if (this.chargeTarget && this.chargeTarget.alive) {
+                                if (this.chargeTarget && this.chargeTarget.alive && !this.chargeTarget.builderMode) {
                                     this.targetDir = UTILS.getDirection(this.chargeTarget.x, this.chargeTarget.y, this.x, this.y);
-                                    tmpSpd *= 1.75;
+                                    tmpSpd = (this.chargeSpeed || this.speed * 1.75) * slowMlt;
                                     charging = true;
                                 }
                             }
@@ -218,13 +304,16 @@ export class AI {
                 }
 
                 // PLAYER COLLISIONS:
-                if (charging || hitting) {
+                var fleeingFromThreat = this.runFrom && this.runFrom.active &&
+                    !(this.runFrom.isPlayer && !this.runFrom.alive);
+                if (!this.lockMove && !fleeingFromThreat &&
+                    (charging || hitting || this.contactDamageInterval)) {
                     var tmpObj;
                     var tmpDst;
                     var tmpDir;
                     for (var i = 0; i < players.length; ++i) {
                         tmpObj = players[i];
-                        if (tmpObj && tmpObj.alive) {
+                        if (tmpObj && tmpObj.alive && !tmpObj.builderMode && !tmpObj.sleighMode) {
                             tmpDst = UTILS.getDistance(this.x, this.y, tmpObj.x, tmpObj.y);
                             if (this.hitRange) {
                                 if (!this.hitWait && tmpDst <= this.hitRange + tmpObj.scale) {
@@ -242,11 +331,25 @@ export class AI {
                                     }
                                 }
                             } else {
-                                if (tmpDst <= this.scale + tmpObj.scale) {
+                                var touchingPlayer = isWithinAIContactShape(this, tmpObj);
+                                if (touchingPlayer) {
                                     tmpDir = UTILS.getDirection(tmpObj.x, tmpObj.y, this.x, this.y);
-                                    tmpObj.changeHealth(-this.dmg);
-                                    tmpObj.xVel += 0.55 * Math.cos(tmpDir);
-                                    tmpObj.yVel += 0.55 * Math.sin(tmpDir);
+                                    if (this.contactDamageInterval) {
+                                        var contactTimer = (this.contactDamageTimers[tmpObj.sid] || 0) + delta;
+                                        if (contactTimer >= this.contactDamageInterval) {
+                                            contactTimer %= this.contactDamageInterval;
+                                            tmpObj.changeHealth(-(this.contactDamage || this.dmg));
+                                            tmpObj.xVel += 0.55 * Math.cos(tmpDir);
+                                            tmpObj.yVel += 0.55 * Math.sin(tmpDir);
+                                        }
+                                        this.contactDamageTimers[tmpObj.sid] = contactTimer;
+                                    } else {
+                                        tmpObj.changeHealth(-this.dmg);
+                                        tmpObj.xVel += 0.55 * Math.cos(tmpDir);
+                                        tmpObj.yVel += 0.55 * Math.sin(tmpDir);
+                                    }
+                                } else if (this.contactDamageInterval) {
+                                    delete this.contactDamageTimers[tmpObj.sid];
                                 }
                             }
                         }
@@ -281,6 +384,31 @@ export class AI {
                         this.yVel = 0;
                     }
                 }
+                if (this.aquatic && !this.waterLocked &&
+                    this.y >= config.mapScale / 2 - config.riverWidth / 2 &&
+                    this.y <= config.mapScale / 2 + config.riverWidth / 2) {
+                    this.waterLocked = true;
+                }
+                if (this.aquatic && this.waterLocked) {
+                    var riverTop = config.mapScale / 2 - config.riverWidth / 2;
+                    var riverBottom = config.mapScale / 2 + config.riverWidth / 2;
+                    var waterMinY = riverTop + this.scale;
+                    var waterMaxY = riverBottom - this.scale;
+                    if (this.y < waterMinY) {
+                        this.y = waterMinY;
+                        this.yVel = Math.max(0, this.yVel);
+                    } else if (this.y > waterMaxY) {
+                        this.y = waterMaxY;
+                        this.yVel = Math.min(0, this.yVel);
+                    }
+                }
+                if (this.snowOnly && !this.builderSpawned) {
+                    var snowMaxY = config.snowBiomeTop - this.scale;
+                    if (this.y > snowMaxY) {
+                        this.y = snowMaxY;
+                        this.yVel = Math.min(0, this.yVel);
+                    }
+                }
             }
         };
 
@@ -294,7 +422,8 @@ export class AI {
             }
             var dx = Math.abs(other.x - this.x) - other.scale;
             var dy = Math.abs(other.y - this.y) - other.scale;
-            return dx <= config.maxScreenWidth / 2 * 1.3 && dy <= config.maxScreenHeight / 2 * 1.3;
+            return dx <= config.maxScreenWidth / 2 * 1.3 * 2.5 &&
+                dy <= config.maxScreenHeight / 2 * 1.3 * 2.5;
         };
         var tmpRatio = 0;
         var animIndex = 0;
@@ -331,26 +460,43 @@ export class AI {
         };
 
         // CHANGE HEALTH:
-        this.changeHealth = function(val, doer, runFrom) {
+        this.changeHealth = function(val, doer, runFrom, environmental) {
             if (this.active) {
+                if (runFrom && runFrom.builderMode) runFrom = null;
                 var oldHealth = this.health;
-                if (val < 0 && doer && doer.isPlayer && doer.accountMatchStats && this.index <= 5) {
+                if (val < 0 && doer && doer.isPlayer && doer.accountMatchStats && !this.boss) {
                     doer.accountMatchStats.animalDamage += Math.min(-val, Math.max(0, oldHealth));
                 }
+                var threat = runFrom || doer;
+                if (val < 0 && this.bullRepel && threat && threat.isPlayer) {
+                    this.provokedPlayer = threat;
+                }
                 this.health += val;
-                if (runFrom) {
+                if (val < 0 && threat && (this.fleeOnDamage ||
+                    (this.fleeFromSpikes && threat.group && threat.group.name === "spikes") ||
+                    (this.fleeOnlyFromNonPlayers && !threat.isPlayer))) {
+                    this.runFrom = threat;
+                    this.chargeTarget = null;
+                    this.waitCount = 0;
+                    this.moveCount = 2000;
+                } else if (val < 0 && threat &&
+                    !(this.fleeFromSpikes && !threat.isPlayer)) {
                     if (this.hitScare && !UTILS.randInt(0, this.hitScare)) {
-                        this.runFrom = runFrom;
+                        this.runFrom = threat;
                         this.waitCount = 0;
                         this.moveCount = 2000;
                     } else {
-                        if (this.hostile && this.chargePlayer && runFrom.isPlayer) {
-                            this.chargeTarget = runFrom;
+                        if (this.hostile && this.chargePlayer && threat.isPlayer) {
+                            if (this.retaliatesOnlyWhenAttacked) {
+                                this.provokedPlayer = threat;
+                                this.runFrom = null;
+                            }
+                            this.chargeTarget = threat;
                             this.waitCount = 0;
                             this.moveCount = 8000;
                         } else {
                             if (!this.dontRun) {
-                                this.runFrom = runFrom;
+                                this.runFrom = threat;
                                 this.waitCount = 0;
                                 this.moveCount = 2000;
                             }
@@ -364,6 +510,12 @@ export class AI {
                     server.send(doer.id, "8", Math.round(this.x), Math.round(this.y), Math.round(-val), 1);
                 }
                 if (this.health <= 0) {
+                    if (this.aquatic && environmental) {
+                        this.health = 0;
+                        this.active = false;
+                        this.alive = false;
+                        return;
+                    }
                     if (this.spawnDelay) {
                         this.spawnCounter = this.spawnDelay;
                         this.x = -1000000;
@@ -376,12 +528,13 @@ export class AI {
                     this.runFrom = null;
                     if (doer) {
                         if (doer.isPlayer && doer.accountMatchStats) {
-                            if (this.index >= 6) doer.accountMatchStats.boss_kills++;
+                            if (this.boss) doer.accountMatchStats.boss_kills++;
                             else doer.accountMatchStats.animal_kills++;
                         }
-                        scoreCallback(doer, this.killScore);
-                        if (this.killScore && typeof doer.earnXP === "function") {
-                            doer.earnXP(this.killScore * 2);
+                        scoreCallback(doer, this.goldReward ?? this.killScore);
+                        var xpReward = this.xpReward ?? this.killScore * 2;
+                        if (xpReward && typeof doer.earnXP === "function") {
+                            doer.earnXP(xpReward);
                         }
                         if (this.drop) {
                             for (var i = 0; i < this.drop.length;) {

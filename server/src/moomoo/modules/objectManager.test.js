@@ -44,3 +44,49 @@ test("object grid placement matches overlap checks at edges and across the map",
         assert.deepEqual(obj.gridLocations, expected, `grid placement for ${x}, ${y}, scale ${scale}`);
     }
 });
+
+test("clears only the requesting player's placed buildings", () => {
+    const manager = new ObjectManager(null, [], {}, { mapScale: 1000, colGrid: 10 }, [], null);
+    const owner = {
+        sid: 1,
+        pps: 0,
+        itemCounts: { 1: 1 },
+        changeItemCount(groupId, amount) {
+            this.itemCounts[groupId] = (this.itemCounts[groupId] || 0) + amount;
+        }
+    };
+    const otherOwner = { sid: 2 };
+    const ownedBuilding = {
+        sid: 10,
+        active: true,
+        owner,
+        group: { id: 1, place: true },
+        gridLocations: []
+    };
+    const ownedNonBuilding = {
+        sid: 11,
+        active: true,
+        owner,
+        group: null,
+        gridLocations: []
+    };
+    const otherBuilding = {
+        sid: 12,
+        active: true,
+        owner: otherOwner,
+        group: { id: 1, place: true },
+        gridLocations: []
+    };
+    manager.objects.push(ownedBuilding, ownedNonBuilding, otherBuilding);
+    const removedPackets = [];
+    const server = { broadcast: (...packet) => removedPackets.push(packet) };
+
+    const removed = manager.removePlayerBuildings(owner, server);
+
+    assert.equal(removed, 1);
+    assert.equal(ownedBuilding.active, false);
+    assert.equal(ownedNonBuilding.active, true);
+    assert.equal(otherBuilding.active, true);
+    assert.deepEqual(owner.itemCounts, { 1: 0 });
+    assert.deepEqual(removedPackets, [["Q", 10]]);
+});

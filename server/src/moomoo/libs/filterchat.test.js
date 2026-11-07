@@ -3,13 +3,17 @@ import assert from "node:assert/strict";
 import {
     classifyChat,
     filter_chat,
+    getChatViolation,
     getMuteDuration,
     isChatAdvertisement,
     isSevereAcrossMessages,
-    isSevereChat
+    isSevereChat,
+    parseMuteDuration
 } from "./filterchat.js";
 import nameFilter from "../../../../shared/namefilter.js";
 import config from "../../../../shared/config.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 test("severe chat variants are caught after normalization", () => {
     for (const message of [
@@ -53,6 +57,13 @@ test("advertising links are recognized", () => {
     assert.equal(isChatAdvertisement("hello there"), false);
 });
 
+test("staff-disabled chat filtering skips profanity and advertising checks", () => {
+    const options = { enabled: false, disableAll: true };
+    assert.equal(getChatViolation("discord.gg/example", options), null);
+    assert.equal(getChatViolation("n i g g e r", options), null);
+    assert.equal(filter_chat("discord.gg/example", options), "discord.gg/example");
+});
+
 test("name filter shares normalization and preserves safe names", () => {
     assert.equal(nameFilter.isBadName("ａ\u0301u.s.t.r.i.a.p.a.i.n.t.e.r"), true);
     assert.equal(nameFilter.isBadName("n\u0430zі"), true);
@@ -64,4 +75,17 @@ test("mute duration doubles up to the configured cap", () => {
     assert.equal(getMuteDuration(1), 5 * 60 * 1000);
     assert.equal(getMuteDuration(2), 10 * 60 * 1000);
     assert.equal(getMuteDuration(100), 24 * 60 * 60 * 1000);
+});
+
+test("manual mute durations accept explicit seconds through years", () => {
+    assert.equal(parseMuteDuration("10s"), 10 * 1000);
+    assert.equal(parseMuteDuration("10m"), 10 * 60 * 1000);
+    assert.equal(parseMuteDuration("10h"), 10 * 60 * 60 * 1000);
+    assert.equal(parseMuteDuration("10d"), 10 * DAY_MS);
+    assert.equal(parseMuteDuration("10mo"), 10 * 30 * DAY_MS);
+    assert.equal(parseMuteDuration("10y"), 10 * 365 * DAY_MS);
+    assert.equal(parseMuteDuration("10 hours"), 10 * 60 * 60 * 1000);
+    assert.equal(parseMuteDuration("10"), null);
+    assert.equal(parseMuteDuration("0d"), null);
+    assert.equal(parseMuteDuration("999999999999999999y"), null);
 });

@@ -76,6 +76,7 @@ export function isChatAdvertisement(raw) {
 }
 
 export function getChatViolation(raw, options) {
+    if (options && options.disableAll === true) return null;
     var match = classifyChat(raw, options);
     if (match) return match;
     return isChatAdvertisement(raw) ? { severity: "blocked" } : null;
@@ -229,6 +230,27 @@ export function formatMuteDuration(ms) {
     if (seconds > 0 || parts.length === 0) parts.push(seconds + "s");
 
     return parts.join(" ");
+}
+
+export function parseMuteDuration(value) {
+    if (typeof value !== "string") return null;
+    var match = /^(\d+)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|days?|mo|mos|months?|y|yrs?|years?)$/i.exec(value.trim());
+    if (!match) return null;
+
+    var amount = Number(match[1]);
+    var unit = match[2].toLowerCase();
+    var multiplier;
+    if (/^(s|sec|secs|second|seconds)$/.test(unit)) multiplier = 1000;
+    else if (/^(m|min|mins|minute|minutes)$/.test(unit)) multiplier = 60 * 1000;
+    else if (/^(h|hr|hrs|hour|hours)$/.test(unit)) multiplier = 60 * 60 * 1000;
+    else if (/^(d|day|days)$/.test(unit)) multiplier = DAY_MS;
+    else if (/^(mo|mos|month|months)$/.test(unit)) multiplier = 30 * DAY_MS;
+    else multiplier = 365 * DAY_MS;
+
+    var duration = amount * multiplier;
+    return Number.isSafeInteger(amount) && amount > 0 && Number.isSafeInteger(duration)
+        ? duration
+        : null;
 }
 
 export function handleDevCommand(player, text) {

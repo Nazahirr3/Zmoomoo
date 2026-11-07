@@ -15,9 +15,12 @@ module.exports = function (sid, objectManager, players, items, UTILS, config, sc
         this.dirPlus = 0;
         this.index = index;
         this.src = data.src;
-        if (data.name) {
-            this.name = data.name;
-        }
+        this.preserveAspectRatio = data.preserveAspectRatio;
+        this.waterSpeedMultiplier = data.waterSpeedMultiplier;
+        this.fleeOnDamage = data.fleeOnDamage === true;
+        this.fleeOnlyFromNonPlayers = data.fleeOnlyFromNonPlayers === true;
+        this.fleeFromSpikes = data.fleeFromSpikes === true;
+        this.name = data.name || null;
         this.weightM = data.weightM;
         this.speed = data.speed;
         this.killScore = data.killScore;
@@ -41,6 +44,10 @@ module.exports = function (sid, objectManager, players, items, UTILS, config, sc
         this.noTrap = data.noTrap;
         this.spawnDelay = data.spawnDelay;
         this.hitWait = 0;
+        this.animTime = 0;
+        this.animSpeed = 0;
+        this.targetAngle = 0;
+        this.dirPlus = 0;
         this.waitCount = 1000;
         this.moveCount = 0;
         this.targetDir = 0;
@@ -80,7 +87,7 @@ module.exports = function (sid, objectManager, players, items, UTILS, config, sc
             var slowMlt = 1;
             if (!this.zIndex && !this.lockMove && this.y >= (config.mapScale / 2) - (config.riverWidth / 2) &&
                 this.y <= (config.mapScale / 2) + (config.riverWidth / 2)) {
-                slowMlt = 0.33;
+                slowMlt = this.waterSpeedMultiplier || 0.33;
                 this.xVel += config.waterCurrent * delta;
             }
             if (this.lockMove) {
@@ -294,7 +301,14 @@ module.exports = function (sid, objectManager, players, items, UTILS, config, sc
         if (this.active) {
             this.health += val;
             if (runFrom) {
-                if (this.hitScare && !UTILS.randInt(0, this.hitScare)) {
+                if (val < 0 && (this.fleeOnDamage ||
+                    (this.fleeFromSpikes && runFrom.group && runFrom.group.name === "spikes") ||
+                    (this.fleeOnlyFromNonPlayers && !runFrom.isPlayer))) {
+                    this.runFrom = runFrom;
+                    this.chargeTarget = null;
+                    this.waitCount = 0;
+                    this.moveCount = 2000;
+                } else if (this.hitScare && !UTILS.randInt(0, this.hitScare)) {
                     this.runFrom = runFrom;
                     this.waitCount = 0;
                     this.moveCount = 2000;

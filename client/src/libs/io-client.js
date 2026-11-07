@@ -92,7 +92,9 @@ IoClient.prototype._handleClose = function (event) {
     var skipNotification = this._suppressCloseNotification;
     this._suppressCloseNotification = false;
 
-    if (event && event.code === 4001) {
+    if (event && event.code === 4001 && event.reason === "Connection limit") {
+        reason = "Connection limit";
+    } else if (event && event.code === 4001) {
         reason = "Invalid Connection";
     } else if (event && event.reason) {
         reason = event.reason;

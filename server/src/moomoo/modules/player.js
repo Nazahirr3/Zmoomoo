@@ -12,6 +12,9 @@ var mathPI = Math.PI;
 export class Player {
 
     is_owner = false;
+    shielded = false;
+    sleighMode = false;
+    sleighSpeedMultiplier = 1;
     hasDiscordOwnerRole = false;
     ownerShown = false;
     hasJoinedGame = false;
@@ -85,10 +88,17 @@ export class Player {
         this.needsResourceSync = false;
         this.clientCps = 0;
         this.clientPing = -1;
+        this.builderMode = false;
+        this.builderSnapshot = null;
+        this.builderPlaceX = null;
+        this.builderPlaceY = null;
 
         this._collisionAlready = new Set();
 
         this.spawn = function(moofoll) {
+            if (this.builderMode) this.setBuilderMode(false);
+            this.sleighMode = false;
+            this.sleighSpeedMultiplier = 1;
             this.hasJoinedGame = true;
             this.active = true;
             this.alive = true;
@@ -197,6 +207,47 @@ export class Player {
             return false;
         };
 
+        this.setBuilderMode = function(enabled) {
+            if (enabled === this.builderMode) return false;
+            this.autoGather = 0;
+            this.mouseState = 0;
+            this.hits = 0;
+            this.gathering = 0;
+            if (enabled) {
+                this.builderSnapshot = {
+                    items: this.items.slice(),
+                    itemCounts: Object.assign({}, this.itemCounts),
+                    buildIndex: this.buildIndex,
+                    speed: this.speed,
+                    pps: this.pps,
+                    sandboxMillCount: this.sandboxMillCount
+                };
+                this.builderMode = true;
+                this.speed = config.playerSpeed * 4;
+                this.dmgOverTime = {};
+                this.builderPlaceX = this.x;
+                this.builderPlaceY = this.y;
+                this.buildIndex = -1;
+                this.mouseState = 0;
+            } else {
+                var snapshot = this.builderSnapshot;
+                this.builderMode = false;
+                this.builderSnapshot = null;
+                this.builderPlaceX = null;
+                this.builderPlaceY = null;
+                if (snapshot) {
+                    this.items = snapshot.items;
+                    this.itemCounts = snapshot.itemCounts;
+                    this.buildIndex = this.items.includes(snapshot.buildIndex) ? snapshot.buildIndex : -1;
+                    this.speed = snapshot.speed;
+                    this.pps = snapshot.pps;
+                    this.sandboxMillCount = snapshot.sandboxMillCount;
+                }
+                this.mouseState = 0;
+            }
+            return true;
+        };
+
         this.setUserData = function(data) {
             if (data) {
                 this.name = "unknown";
@@ -254,7 +305,8 @@ export class Player {
                 this.iconIndex,
                 this.zIndex,
                 Number.isFinite(this.clientCps) ? Math.max(0, Math.round(this.clientCps)) : 0,
-                Number.isFinite(this.clientPing) ? Math.max(-1, Math.round(this.clientPing)) : -1
+                Number.isFinite(this.clientPing) ? Math.max(-1, Math.round(this.clientPing)) : -1,
+                this.sleighMode === true
             ];
         };
 
@@ -329,9 +381,9 @@ export class Player {
                 this.xVel = 0;
                 this.yVel = 0;
             } else {
-                var buildPenalty = (this.buildIndex >= 0) ? (config.physics ? config.physics.buildingSpeedPenalty : 0.5) : 1;
-                var spdMult = buildPenalty * (items.weapons[this.weaponIndex].spdMult || 1) * (this.skin ? this.skin.spdMult || 1 : 1) * (this.tail ? this.tail.spdMult || 1 : 1) * (this.y <= config.mapScale ? 1 : 1);
-                if (!this.zIndex && this.y >= config.mapScale / 2 - config.riverWidth / 2 && this.y <= config.mapScale / 2 + config.riverWidth / 2) {
+                var buildPenalty = !this.builderMode && (this.buildIndex >= 0) ? (config.physics ? config.physics.buildingSpeedPenalty : 0.5) : 1;
+                var spdMult = buildPenalty * (items.weapons[this.weaponIndex].spdMult || 1) * (this.skin ? this.skin.spdMult || 1 : 1) * (this.tail ? this.tail.spdMult || 1 : 1) * (this.sleighMode ? this.sleighSpeedMultiplier : 1);
+                if (!this.builderMode && !this.sleighMode && !this.zIndex && this.y >= config.mapScale / 2 - config.riverWidth / 2 && this.y <= config.mapScale / 2 + config.riverWidth / 2) {
                     if (this.skin && this.skin.watrImm) {
                         spdMult *= (config.water ? config.water.immunitySpeedMultiplier : 0.75);
                         this.xVel += config.waterCurrent * (config.water ? config.water.immunityCurrentEffect : 0.4) * delta;
@@ -478,6 +530,12 @@ export class Player {
         };
 
         this.changeHealth = function(amount, doer) {
+            if ((this.builderMode || this.shielded || this.sleighMode) && amount < 0) {
+                if (doer && doer.isPlayer && doer.canSee(this)) {
+                    doer.send("iv", Math.round(this.x), Math.round(this.y));
+                }
+                return false;
+            }
             if (amount > 0 && this.health >= this.maxHealth) return false;
             if (amount < 0 && this.skin) amount *= this.skin.dmgMult || 1;
             if (amount < 0 && this.tail) amount *= this.tail.dmgMult || 1;
@@ -504,6 +562,13 @@ export class Player {
         };
 
         this.kill = function(doer) {
+            if (this.builderMode) {
+                this.setBuilderMode(false);
+                this.send("V", this.items, 0);
+                this.send("bm", false);
+            }
+            this.sleighMode = false;
+            this.sleighSpeedMultiplier = 1;
             if (doer && doer.alive) {
                 doer.kills++;
                 if (doer.accountMatchStats) doer.accountMatchStats.kills++;
@@ -540,11 +605,19 @@ export class Player {
         };
 
         this.buildItem = function(item) {
-            if (!item || !Array.isArray(this.items) || !this.items.includes(item.id)) return false;
+            if (!item || !Array.isArray(this.items) || (!this.builderMode && !this.items.includes(item.id))) return false;
+            if (this.builderMode && (!item.group || !item.group.place || item.consume)) return false;
             var tmpS = this.scale + item.scale + (item.placeOffset || 0);
-            var tmpX = this.x + tmpS * mathCOS(this.dir);
-            var tmpY = this.y + tmpS * mathSIN(this.dir);
-            if (this.canBuild(item) && !(item.consume && this.skin && this.skin.noEat) && (item.consume || objectManager.checkItemLocation(tmpX, tmpY, item.scale, 0.6, item.id, false, this))) {
+            var tmpX = this.builderMode && Number.isFinite(this.builderPlaceX)
+                ? Math.min(config.mapScale - item.scale, Math.max(item.scale, this.builderPlaceX))
+                : this.x + tmpS * mathCOS(this.dir);
+            var tmpY = this.builderMode && Number.isFinite(this.builderPlaceY)
+                ? Math.min(config.mapScale - item.scale, Math.max(item.scale, this.builderPlaceY))
+                : this.y + tmpS * mathSIN(this.dir);
+            var canPlace = this.builderMode ||
+                (this.canBuild(item) && !(item.consume && this.skin && this.skin.noEat) &&
+                    (item.consume || objectManager.checkItemLocation(tmpX, tmpY, item.scale, 0.6, item.id, false, this)));
+            if (canPlace) {
                 var worked = false;
                 if (item.consume) {
                     if (this.hitTime) {
@@ -564,9 +637,9 @@ export class Player {
                     if (this.shameTimer <= 0) worked = item.consume(this);
                 } else {
                     worked = true;
-                    if (item.group && item.group.limit) this.changeItemCount(item.group.id, 1);
+                    if (!this.builderMode && item.group && item.group.limit) this.changeItemCount(item.group.id, 1);
                     var placedItem = item;
-                    if (item.pps) {
+                    if (item.pps && !this.builderMode) {
                         var sandboxMultiplier = config.isSandbox ? (config.millPpsMultiplier || 1) : 1;
                         var ppsToAdd = item.pps * sandboxMultiplier;
                         this.pps += ppsToAdd;
@@ -575,8 +648,10 @@ export class Player {
                     objectManager.add(objectManager.objects.length, tmpX, tmpY, this.dir, item.scale, item.type, placedItem, false, this);
                 }
                 if (worked) {
-                    this.useRes(item);
-                    this.buildIndex = -1;
+                    if (!this.builderMode) {
+                        this.useRes(item);
+                        this.buildIndex = -1;
+                    }
                 }
             }
         };
@@ -598,6 +673,7 @@ export class Player {
         };
 
         this.canBuild = function(item) {
+            if (this.builderMode) return Boolean(item && item.group && item.group.place && !item.consume);
             if (config.isSandbox) {
                 if (item.group) {
                     var count = this.itemCounts[item.group.id] || 0;
@@ -618,6 +694,7 @@ export class Player {
         };
 
         this.gather = function() {
+            if (this.sleighMode) return;
             this.noMovTimer = 0;
             this.slowMult -= items.weapons[this.weaponIndex].hitSlow || 0.3;
             if (this.slowMult < 0) this.slowMult = 0;
@@ -667,7 +744,8 @@ export class Player {
 
             for (var i = 0; i < players.length + ais.length; ++i) {
                 tmpObj = players[i] || ais[i - players.length];
-                if (tmpObj != this && tmpObj.alive && !(tmpObj.team && tmpObj.team == this.team)) {
+                if (tmpObj != this && tmpObj.alive && !tmpObj.builderMode && !tmpObj.sleighMode &&
+                    !(tmpObj.team && tmpObj.team == this.team)) {
                     tmpDist = UTILS.getDistance(this.x, this.y, tmpObj.x, tmpObj.y) - tmpObj.scale * 1.8;
                     if (tmpDist <= items.weapons[this.weaponIndex].range) {
                         tmpDir = UTILS.getDirection(tmpObj.x, tmpObj.y, this.x, this.y);
@@ -758,7 +836,8 @@ export class Player {
             if (other.skin && other.skin.invisTimer && other.noMovTimer >= other.skin.invisTimer) return false;
             var dx = mathABS(other.x - this.x) - other.scale;
             var dy = mathABS(other.y - this.y) - other.scale;
-            return dx <= config.maxScreenWidth / 2 * 1.3 && dy <= config.maxScreenHeight / 2 * 1.3;
+            return dx <= config.maxScreenWidth / 2 * 1.3 * 2.5 &&
+                dy <= config.maxScreenHeight / 2 * 1.3 * 2.5;
         };
     };
 }
